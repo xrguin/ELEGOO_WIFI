@@ -207,11 +207,13 @@ send_command(robot_ip, "STOP")
 - `STOP` or `S` - Stop
 
 ### Serial/JSON Commands:
-- `{"N":3,"D1":1,"D2":150,"H":"test"}` - Forward
-- `{"N":3,"D1":2,"D2":150,"H":"test"}` - Backward
-- `{"N":3,"D1":3,"D2":150,"H":"test"}` - Left
-- `{"N":3,"D1":4,"D2":150,"H":"test"}` - Right
-- `{"N":3,"D1":0,"D2":0,"H":"test"}` - Stop
+ Action   │ N (Command) │ D1 (Direction) │ D2 (Speed) │ Full JSON Command                  │
+  ├──────────┼─────────────┼────────────────┼────────────┼────────────────────────────────────┤
+  │ Forward  │ 3           │ 3              │ 150        │ {"N":3,"D1":3,"D2":150,"H":"test"} │
+  │ Backward │ 3           │ 4              │ 150        │ {"N":3,"D1":4,"D2":150,"H":"test"} │
+  │ Left     │ 3           │ 1              │ 150        │ {"N":3,"D1":1,"D2":150,"H":"test"} │
+  │ Right    │ 3           │ 2              │ 150        │ {"N":3,"D1":2,"D2":150,"H":"test"} │
+  │ Stop     │ 3           │ 1 (or any)     │ 0          │ {"N":3,"D1":1,"D2":0,"H":"test"}   │
 
 ## Features Status
 
