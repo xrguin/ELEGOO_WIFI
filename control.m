@@ -2,20 +2,31 @@ clear;clc;
 % --- Main script ---
 % Set the robot's IP address
 robot_ip = "192.168.1.140"; % Using string for IP is fine
-
+json_command_left = '{"N":102,"D1":5,"D2":150,"H":"matlab"}';
+json_command_right =   '{"N":102,"D1":7,"D2":150,"H":"matlab"}';
+reponse = send_command(robot_ip,"F");
+pause(4);
 
 
 disp('Sending command: Forward-Curving Left (JSON)');
-json_command_left = '{"N":102,"D1":5,"D2":150,"H":"matlab"}';
-json_command_right =   '{"N":102,"D1":7,"D2":150,"H":"matlab"}';
+
 response = send_command(robot_ip, json_command_right);
 disp(response);
 pause(2);
-
+response = send_command(robot_ip, json_command_left);
+disp(response);
+pause(2);
 % 5. Stop the robot again
 disp('Sending command: Stop');
 response = send_command(robot_ip, 'S');
+pause(1);
+response = send_command(robot_ip, "B");
 disp(response);
+pause(2);
+
+response = send_command(robot_ip, "S");
+disp(response);
+pause(2);
 
 disp('Command sequence finished.');
 
