@@ -1134,6 +1134,9 @@ static void CMD_CarControl(uint8_t is_CarDirection, uint8_t is_CarSpeed)
 {
   switch (is_CarDirection)
   {
+  case 0:
+    ApplicationFunctionSet_SmartRobotCarMotionControl(stop_it, 0);
+    break;
   case 1: 
     ApplicationFunctionSet_SmartRobotCarMotionControl(Left, is_CarSpeed);
     break;
@@ -1785,257 +1788,224 @@ void ApplicationFunctionSet::ApplicationFunctionSet_SerialPortDataAnalysis(void)
   {
     while (c != '}' && Serial.available() > 0)
     {
-      // while (Serial.available() == 0)//Forcibly wait for a frame of data to be received
-      //   ;
       c = Serial.read();
       SerialPortData += (char)c;
     }
   }
   if (c == '}') //Data frame tail check
   {
-#if _Test_print
-    Serial.println(SerialPortData);
-#endif
-    // if (true == SerialPortData.equals("{f}") || true == SerialPortData.equals("{b}") || true == SerialPortData.equals("{l}") || true == SerialPortData.equals("{r}"))
-    // {
-    //   Serial.print(SerialPortData);
-    //   SerialPortData = "";
-    //   return;
-    // }
-    // if (true == SerialPortData.equals("{Factory}") || true == SerialPortData.equals("{WA_NO}") || true == SerialPortData.equals("{WA_OK}")) 
-    // {
-    //   SerialPortData = "";
-    //   return;
-    // }
-    StaticJsonDocument<200> doc;                                       //Declare a JsonDocument object
-    DeserializationError error = deserializeJson(doc, SerialPortData); //Deserialize JSON data from the serial data buffer
+    ApplicationFunctionSet_ProcessCommand(SerialPortData);
     SerialPortData = "";
-    if (error)
-    {
-      Serial.println("error:deserializeJson");
-    }
-    else if (!error) //Check if the deserialization is successful
-    {
-      int control_mode_N = doc["N"];
-      const char *temp = doc["H"];
-      CommandSerialNumber = temp; //Get the serial number of the new command
+  }
+}
 
-      /*Please view the following code blocks in conjunction with the Communication protocol for Smart Robot Car.pdf*/
-      switch (control_mode_N)
-      {
-      case 1: /*<Command：N 1> motor control mode */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_MotorControl;
-        CMD_is_MotorSelection = doc["D1"];
-        CMD_is_MotorSpeed = doc["D2"];
-        CMD_is_MotorDirection = doc["D3"];
-
-#if _is_print
-        Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 2:                                                                     /*<Command：N 2> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_CarControl_TimeLimit; /*Car movement direction and speed control：Time limited mode*/
-        CMD_is_CarDirection = doc["D1"];
-        CMD_is_CarSpeed = doc["D2"];
-        CMD_is_CarTimer = doc["T"];
-        Application_SmartRobotCarxxx0.CMD_CarControl_Millis = millis();
-#if _is_print
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 3:                                                                       /*<Command：N 3> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_CarControl_NoTimeLimit; /*Car movement direction and speed control：No time limited mode*/
-        CMD_is_CarDirection = doc["D1"];
-        CMD_is_CarSpeed = doc["D2"];
-#if _is_print
-        Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 4:                                                                   /*<Command：N 4> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_MotorControl_Speed; /*motor control:Control motor speed mode*/
-        CMD_is_MotorSpeed_L = doc["D1"];
-        CMD_is_MotorSpeed_R = doc["D2"];
-#if _is_print
-        Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-      case 5:                                                             /*<Command：N 5> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_ServoControl; /*servo motor control*/
-        CMD_is_Servo = doc["D1"];
-        CMD_is_Servo_angle = doc["D2"];
-#if _is_print
-        Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-      case 7:                                                                          /*<Command：N 7> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_LightingControl_TimeLimit; /*Lighting control:Time limited mode*/
-
-        CMD_is_LightingSequence = doc["D1"]; //Lighting (Left, front, right, back and center)
-        CMD_is_LightingColorValue_R = doc["D2"];
-        CMD_is_LightingColorValue_G = doc["D3"];
-        CMD_is_LightingColorValue_B = doc["D4"];
-        CMD_is_LightingTimer = doc["T"];
-        Application_SmartRobotCarxxx0.CMD_LightingControl_Millis = millis();
-#if _is_print
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 8:                                                                            /*<Command：N 8> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_LightingControl_NoTimeLimit; /*Lighting control:No time limited mode*/
-
-        CMD_is_LightingSequence = doc["D1"]; //Lighting (Left, front, right, back and center)
-        CMD_is_LightingColorValue_R = doc["D2"];
-        CMD_is_LightingColorValue_G = doc["D3"];
-        CMD_is_LightingColorValue_B = doc["D4"];
-#if _is_print
-        Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 21: /*<Command：N 21>：ultrasonic sensor: detect obstacle distance */
-        CMD_UltrasoundModuleStatus_xxx0(doc["D1"]);
-#if _is_print
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 22: /*<Command：N 22>：IR sensor：for line tracking mode */
-        CMD_TraceModuleStatus_xxx0(doc["D1"]);
-#if _is_print
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 23: /*<Command：N 23>：Check if the car leaves the ground */
-        if (true == Car_LeaveTheGround)
-        {
-#if _is_print
-          Serial.print('{' + CommandSerialNumber + "_false}");
-#endif
-        }
-        else if (false == Car_LeaveTheGround)
-        {
-#if _is_print
-          Serial.print('{' + CommandSerialNumber + "_true}");
-#endif
-        }
-        break;
-
-      case 110:                                                                                 /*<Command：N 110> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_ClearAllFunctions_Programming_mode; /*Clear all function:Enter programming mode*/
-#if _is_print
-        Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-      case 100:                                                                             /*<Command：N 100> */
-        Application_SmartRobotCarxxx0.Functional_Mode = CMD_ClearAllFunctions_Standby_mode; /*Clear all function:Enter standby mode*/
-#if _is_print
-        Serial.print("{ok}");
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 101: /*<Command：N 101> :remote control to switch the car mode*/
-        if (1 == doc["D1"])
-        {
-          Application_SmartRobotCarxxx0.Functional_Mode = TraceBased_mode;
-        }
-        else if (2 == doc["D1"])
-        {
-          Application_SmartRobotCarxxx0.Functional_Mode = ObstacleAvoidance_mode;
-        }
-        else if (3 == doc["D1"])
-        {
-          Application_SmartRobotCarxxx0.Functional_Mode = Follow_mode;
-        }
-
-#if _is_print
-        Serial.print("{ok}");
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
-
-      case 105: /*<Command：N 105> :FastLED brightness adjustment control command*/
-        if (1 == doc["D1"] && (CMD_is_FastLED_setBrightness < 250))
-        {
-          CMD_is_FastLED_setBrightness += 5;
-        }
-        else if (2 == doc["D1"] && (CMD_is_FastLED_setBrightness > 0))
-        {
-          CMD_is_FastLED_setBrightness -= 5;
-        }
-        FastLED.setBrightness(CMD_is_FastLED_setBrightness);
-
+/*Command processing function*/
+void ApplicationFunctionSet::ApplicationFunctionSet_ProcessCommand(String command)
+{
 #if _Test_print
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-        Serial.print("{ok}");
+  Serial.println(command);
 #endif
-        break;
 
-      case 106: /*<Command：N 106> */
-      {
-        uint8_t temp_Set_Servo = doc["D1"];
-        if (temp_Set_Servo > 5 || temp_Set_Servo < 1)
-          return;
-        ApplicationFunctionSet_Servo(temp_Set_Servo);
-      }
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, command);
 
+  if (error)
+  {
+    Serial.print("deserializeJson() failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  int control_mode_N = doc["N"];
+  const char *temp = doc["H"];
+  CommandSerialNumber = temp;
+
+  switch (control_mode_N)
+  {
+  case 1: /*<Command：N 1> motor control mode */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_MotorControl;
+    CMD_is_MotorSelection = doc["D1"];
+    CMD_is_MotorSpeed = doc["D2"];
+    CMD_is_MotorDirection = doc["D3"];
 #if _is_print
-        //Serial.print('{' + CommandSerialNumber + "_ok}");
-        Serial.print("{ok}");
+    Serial.print('{' + CommandSerialNumber + "_ok}");
 #endif
-        break;
-      case 102: /*<Command：N 102> :Rocker control mode command*/
-        Application_SmartRobotCarxxx0.Functional_Mode = Rocker_mode;
-        Rocker_temp = doc["D1"];
-        Rocker_CarSpeed = doc["D2"];
-        
-        switch (Rocker_temp)
-        {
-        case 1:
-          Application_SmartRobotCarxxx0.Motion_Control = Forward;
-          break;
-        case 2:
-          Application_SmartRobotCarxxx0.Motion_Control = Backward;
-          break;
-        case 3:
-          Application_SmartRobotCarxxx0.Motion_Control = Left;
-          break;
-        case 4:
-          Application_SmartRobotCarxxx0.Motion_Control = Right;
-          break;
-        case 5:
-          Application_SmartRobotCarxxx0.Motion_Control = LeftForward;
-          break;
-        case 6:
-          Application_SmartRobotCarxxx0.Motion_Control = LeftBackward;
-          break;
-        case 7:
-          Application_SmartRobotCarxxx0.Motion_Control = RightForward;
-          break;
-        case 8:
-          Application_SmartRobotCarxxx0.Motion_Control = RightBackward;
-          break;
-        case 9:
-          Application_SmartRobotCarxxx0.Motion_Control = stop_it;
-          Application_SmartRobotCarxxx0.Functional_Mode = Standby_mode;
-          break;
-        default:
-          Application_SmartRobotCarxxx0.Motion_Control = stop_it;
-          break;
-        }
-#if _is_print
-        // Serial.print('{' + CommandSerialNumber + "_ok}");
-#endif
-        break;
+    break;
 
-      default:
-        break;
-      }
+  case 2: /*<Command：N 2> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_CarControl_TimeLimit;
+    CMD_is_CarDirection = doc["D1"];
+    CMD_is_CarSpeed = doc["D2"];
+    CMD_is_CarTimer = doc["T"];
+    Application_SmartRobotCarxxx0.CMD_CarControl_Millis = millis();
+    break;
+
+  case 3: /*<Command：N 3> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_CarControl_NoTimeLimit;
+    CMD_is_CarDirection = doc["D1"];
+    CMD_is_CarSpeed = doc["D2"];
+#if _is_print
+    Serial.print('{' + CommandSerialNumber + "_ok}");
+#endif
+    break;
+
+  case 4: /*<Command：N 4> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_MotorControl_Speed;
+    CMD_is_MotorSpeed_L = doc["D1"];
+    CMD_is_MotorSpeed_R = doc["D2"];
+#if _is_print
+    Serial.print('{' + CommandSerialNumber + "_ok}");
+#endif
+    break;
+  case 5: /*<Command：N 5> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_ServoControl;
+    CMD_is_Servo = doc["D1"];
+    CMD_is_Servo_angle = doc["D2"];
+#if _is_print
+    Serial.print('{' + CommandSerialNumber + "_ok}");
+#endif
+    break;
+  case 7: /*<Command：N 7> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_LightingControl_TimeLimit;
+    CMD_is_LightingSequence = doc["D1"];
+    CMD_is_LightingColorValue_R = doc["D2"];
+    CMD_is_LightingColorValue_G = doc["D3"];
+    CMD_is_LightingColorValue_B = doc["D4"];
+    CMD_is_LightingTimer = doc["T"];
+    Application_SmartRobotCarxxx0.CMD_LightingControl_Millis = millis();
+    break;
+
+  case 8: /*<Command：N 8> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_LightingControl_NoTimeLimit;
+    CMD_is_LightingSequence = doc["D1"];
+    CMD_is_LightingColorValue_R = doc["D2"];
+    CMD_is_LightingColorValue_G = doc["D3"];
+    CMD_is_LightingColorValue_B = doc["D4"];
+#if _is_print
+    Serial.print('{' + CommandSerialNumber + "_ok}");
+#endif
+    break;
+
+  case 21: /*<Command：N 21>*/
+    CMD_UltrasoundModuleStatus_xxx0(doc["D1"]);
+    break;
+
+  case 22: /*<Command：N 22>*/
+    CMD_TraceModuleStatus_xxx0(doc["D1"]);
+    break;
+
+  case 23: /*<Command：N 23>*/
+    if (true == Car_LeaveTheGround)
+    {
+#if _is_print
+      Serial.print('{' + CommandSerialNumber + "_false}");
+#endif
     }
+    else if (false == Car_LeaveTheGround)
+    {
+#if _is_print
+      Serial.print('{' + CommandSerialNumber + "_true}");
+#endif
+    }
+    break;
+
+  case 110: /*<Command：N 110> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_ClearAllFunctions_Programming_mode;
+#if _is_print
+    Serial.print('{' + CommandSerialNumber + "_ok}");
+#endif
+    break;
+  case 100: /*<Command：N 100> */
+    Application_SmartRobotCarxxx0.Functional_Mode = CMD_ClearAllFunctions_Standby_mode;
+#if _is_print
+    Serial.print("{ok}");
+#endif
+    break;
+
+  case 101: /*<Command：N 101>*/
+    if (1 == doc["D1"])
+    {
+      Application_SmartRobotCarxxx0.Functional_Mode = TraceBased_mode;
+    }
+    else if (2 == doc["D1"])
+    {
+      Application_SmartRobotCarxxx0.Functional_Mode = ObstacleAvoidance_mode;
+    }
+    else if (3 == doc["D1"])
+    {
+      Application_SmartRobotCarxxx0.Functional_Mode = Follow_mode;
+    }
+#if _is_print
+    Serial.print("{ok}");
+#endif
+    break;
+
+  case 105: /*<Command：N 105>*/
+    if (1 == doc["D1"] && (CMD_is_FastLED_setBrightness < 250))
+    {
+      CMD_is_FastLED_setBrightness += 5;
+    }
+    else if (2 == doc["D1"] && (CMD_is_FastLED_setBrightness > 0))
+    {
+      CMD_is_FastLED_setBrightness -= 5;
+    }
+    FastLED.setBrightness(CMD_is_FastLED_setBrightness);
+#if _Test_print
+    Serial.print("{ok}");
+#endif
+    break;
+
+  case 106: /*<Command：N 106>*/
+  {
+    uint8_t temp_Set_Servo = doc["D1"];
+    if (temp_Set_Servo > 5 || temp_Set_Servo < 1)
+      return;
+    ApplicationFunctionSet_Servo(temp_Set_Servo);
+  }
+#if _is_print
+    Serial.print("{ok}");
+#endif
+    break;
+  case 102: /*<Command：N 102>*/
+    Application_SmartRobotCarxxx0.Functional_Mode = Rocker_mode;
+    Rocker_temp = doc["D1"];
+    Rocker_CarSpeed = doc["D2"];
+
+    switch (Rocker_temp)
+    {
+    case 1:
+      Application_SmartRobotCarxxx0.Motion_Control = Forward;
+      break;
+    case 2:
+      Application_SmartRobotCarxxx0.Motion_Control = Backward;
+      break;
+    case 3:
+      Application_SmartRobotCarxxx0.Motion_Control = Left;
+      break;
+    case 4:
+      Application_SmartRobotCarxxx0.Motion_Control = Right;
+      break;
+    case 5:
+      Application_SmartRobotCarxxx0.Motion_Control = LeftForward;
+      break;
+    case 6:
+      Application_SmartRobotCarxxx0.Motion_Control = LeftBackward;
+      break;
+    case 7:
+      Application_SmartRobotCarxxx0.Motion_Control = RightForward;
+      break;
+    case 8:
+      Application_SmartRobotCarxxx0.Motion_Control = RightBackward;
+      break;
+    case 9:
+      Application_SmartRobotCarxxx0.Motion_Control = stop_it;
+      Application_SmartRobotCarxxx0.Functional_Mode = Standby_mode;
+      break;
+    default:
+      break;
+    }
+    break;
+  default:
+    break;
   }
 }

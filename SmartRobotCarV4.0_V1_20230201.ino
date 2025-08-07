@@ -161,28 +161,22 @@ void processWiFiCommand(String command) {
   String jsonCommand = "";
   
   if (command == "FORWARD" || command == "F") {
-    jsonCommand = "{\"N\":1,\"D1\":1,\"D2\":150}";  // Forward at speed 150
+    jsonCommand = "{\"N\":3,\"D1\":3,\"D2\":150,\"H\":\"wifi\"}";  // Forward at speed 150
   } else if (command == "BACKWARD" || command == "B") {
-    jsonCommand = "{\"N\":1,\"D1\":2,\"D2\":150}";  // Backward at speed 150
+    jsonCommand = "{\"N\":3,\"D1\":4,\"D2\":150,\"H\":\"wifi\"}";  // Backward at speed 150
   } else if (command == "LEFT" || command == "L") {
-    jsonCommand = "{\"N\":1,\"D1\":3,\"D2\":150}";  // Left at speed 150
+    jsonCommand = "{\"N\":3,\"D1\":1,\"D2\":150,\"H\":\"wifi\"}";  // Left at speed 150
   } else if (command == "RIGHT" || command == "R") {
-    jsonCommand = "{\"N\":1,\"D1\":4,\"D2\":150}";  // Right at speed 150
+    jsonCommand = "{\"N\":3,\"D1\":2,\"D2\":150,\"H\":\"wifi\"}";  // Right at speed 150
   } else if (command == "STOP" || command == "S") {
-    jsonCommand = "{\"N\":1,\"D1\":0,\"D2\":0}";    // Stop
+    jsonCommand = "{\"N\":3,\"D1\":0,\"D2\":0,\"H\":\"wifi\"}";    // Stop
   } else if (command.startsWith("{")) {
     // Already JSON format, use as is
-    jsonCommand = command + "}";
+    jsonCommand = command;
   }
   
   // Feed the JSON command to the existing serial parser by simulating serial input
   if (jsonCommand.length() > 0) {
-    // Simulate sending the command through serial
-    for (int i = 0; i < jsonCommand.length(); i++) {
-      // This would need to be fed to the serial parser
-      // For now, we'll just print it
-      Serial.print("Processing: ");
-      Serial.println(jsonCommand);
-    }
+    Application_FunctionSet.ApplicationFunctionSet_ProcessCommand(jsonCommand);
   }
 }

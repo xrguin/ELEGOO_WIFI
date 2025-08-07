@@ -27,6 +27,7 @@ public:
   void ApplicationFunctionSet_KeyCommand(void);         //Mode Switch Button
   void ApplicationFunctionSet_SensorDataUpdate(void);   //Sensor Data Update
   void ApplicationFunctionSet_SerialPortDataAnalysis(void);
+  void ApplicationFunctionSet_ProcessCommand(String command);
   void ApplicationFunctionSet_IRrecv(void);
 
 public: /*CMD*/
