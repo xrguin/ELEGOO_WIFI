@@ -34,11 +34,21 @@ natnet_server_ip = '192.168.1.209'; % The IP of the computer running Motive (the
 
 % -- Target and Robot ID Configuration
 % IMPORTANT: All position values are in MILLIMETERS (mm).
-target_pos = [-120, 34, -540]; % Target position [x, y, z] in MILLIMETERS.
+%target_pos = [-120, 34, -540]; % Target position [x, y, z] in MILLIMETERS.
+way_points = [1450 , 23, 707;...
+               1136, 25, 348;...
+               697, 33, -122;...
+               374, 34, -287;...
+               -133, 30, -415;...
+               -613, 33, -638;...
+               -748.5, 36, -1136.8;...
+               -713.8, 38, -1598.8;...
+               -972.4, 42, -2017.3];
+target_pos = way_points(end, :);
 robot_id = 1;                    % The Rigid Body ID of your robot in Motive.
 
 % -- PID Controller Gains (THESE WILL REQUIRE EXPERIMENTAL TUNING)
-Kp_h = 0.9;  % Heading Proportional Gain
+Kp_h = 0.85;  % Heading Proportional Gain
 Ki_h = 0.03; % Heading Integral Gain
 Kd_h = 0.15;  % Heading Derivative Gain
 Kp_d = 0.25;  % Distance Proportional Gain
@@ -46,10 +56,10 @@ Ki_d = 0.01; % Distance Integral Gain
 Kd_d = 0.1;  % Distance Derivative Gain
 
 % -- Control Loop & Physics Parameters
-distance_tolerance = 50;   % Stop when within 50 mm (5 cm) of the target.
+distance_tolerance = 80;   % Stop when within 50 mm (5 cm) of the target.
 heading_tolerance = 10;   % Allowable heading error in degrees to switch to DRIVING.
 max_turn_speed = 100;      % Maximum speed during turning (0-255).
-max_forward_speed = 120;   % Maximum speed when driving forward (0-255).
+max_forward_speed = 60;   % Maximum speed when driving forward (0-255).
 
 % =======================================================================
 % 2. INITIALIZATION
@@ -92,6 +102,10 @@ set(ax, 'ZDir', 'reverse');
 
 % -- Plot Handles
 h_target = plot3(ax, target_pos(1), target_pos(2), target_pos(3), 'r*', 'MarkerSize', 15, 'LineWidth', 2);
+if size(way_points, 1) > 1
+     plot3(ax, way_points(1:end-1, 1), way_points(1:end-1, 2), way_points(1:end-1, 3), 'bo',...
+      'MarkerSize', 10, 'MarkerFaceColor', 'b');
+end
 h_robot = plot3(ax, 0, 0, 0, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'k');
 h_robot_orientation = line(ax, [0 0], [0 0], [0 0], 'Color', 'r', 'LineWidth', 2);
 h_trajectory = plot3(ax, 0, 0, 0, 'b-');
@@ -104,6 +118,7 @@ integral_d = 0;
 prev_error_d = 0;
 trajectory_points = [];
 last_loop_time = tic;
+current_waypoint_index = 1;
 robot_state = 'TURNING'; % Initial state
 
 disp('Initialization complete. Starting control loop...');
@@ -131,23 +146,39 @@ try
 
         q = quaternion(rb_data.qw, rb_data.qx, rb_data.qy, rb_data.qz);
         angles = q.EulerAngles('YZX'); 
-        current_angle = rad2deg(angles(1)) - 140;
+        current_angle = rad2deg(angles(1)) + 230;
+        if current_angle >= 180
+            current_angle = -360 + current_angle;
+        end
 
         % -- ERROR CALCULATION (in XZ plane)
-        error_vec_xz = [target_pos(1) - current_pos_3d(1), target_pos(3) - current_pos_3d(3)];
+        current_target = way_points(current_waypoint_index, :);
+        error_vec_xz = [current_target(1) - current_pos_3d(1), current_target(3) - current_pos_3d(3)];
+
+
+       % error_vec_xz = [target_pos(1) - current_pos_3d(1), target_pos(3) - current_pos_3d(3)];
         distance_error = norm(error_vec_xz);
 
         if distance_error < distance_tolerance
-            disp('Target reached!');
-            send_robot_command(robot_ip, 'S');
-            break;
+            if current_waypoint_index == size(way_points, 1)
+              disp('Target reached!');
+              send_robot_command(robot_ip, 'S');
+              break;
+            else
+              disp(['Waypoint ', num2str(current_waypoint_index), ' reached. Moving to the next.']);
+              current_waypoint_index = current_waypoint_index + 1;
+               % integral_h = 0;
+               % prev_error_h = 0;
+               % integral_d = 0;
+               % prev_error_d = 0;
+           end
         end
 
-        target_angle = rad2deg(atan2(error_vec_xz(2), error_vec_xz(1)));
+        target_angle = rad2deg(atan2(error_vec_xz(1), error_vec_xz(2)));
         fprintf("target angle : %f,  current angle : %f\n",target_angle,current_angle);
         heading_error = target_angle - current_angle;
-  %      heading_error = atan2(sin(deg2rad(heading_error)), cos(deg2rad(heading_error)));
-  %      heading_error = rad2deg(heading_error);
+        heading_error = atan2(sin(deg2rad(heading_error)), cos(deg2rad(heading_error)));
+        heading_error = rad2deg(heading_error);
 
         % -- STATE MACHINE: Decide whether to TURN or DRIVE
         switch robot_state
@@ -172,7 +203,7 @@ try
         forward_speed = 0;
         turn_speed = 0;
 
-        if strcmp(robot_state, 'TURNING')
+        if strcmp(robot_state, 'TURNING') || (strcmp(robot_state, 'DRIVING') && current_waypoint_index < size(way_points, 1))
             % --- Yaw PID Controller ---
             integral_h = integral_h + heading_error * dt;
             derivative_h = (heading_error - prev_error_h) / dt;
@@ -181,20 +212,24 @@ try
             
             % Ensure turn speed does not exceed max
             turn_speed = min(max(turn_speed, -max_turn_speed), max_turn_speed);
+
+            forward_speed = 60;
             
             % Turn in place
-            left_speed = round(-turn_speed);
-            right_speed = round(turn_speed);
+            left_speed = round(forward_speed + turn_speed);
+            right_speed = round(forward_speed - turn_speed);
 
-        elseif strcmp(robot_state, 'DRIVING')
+        elseif strcmp(robot_state, 'DRIVING') && current_waypoint_index == size(way_points, 1)
             % --- Distance PID Controller ---
-            integral_d = integral_d + distance_error * dt;
-            derivative_d = (distance_error - prev_error_d) / dt;
-            forward_speed = Kp_d * distance_error + Ki_d * integral_d + Kd_d * derivative_d;
-            prev_error_d = distance_error;
+            % integral_d = integral_d + distance_error * dt;
+            % derivative_d = (distance_error - prev_error_d) / dt;
+            % forward_speed = Kp_d * distance_error + Ki_d * integral_d + Kd_d * derivative_d;
+            % prev_error_d = distance_error;
+            % 
+            % % Ensure forward speed does not exceed max
+            % forward_speed = min(max(forward_speed, 0), max_forward_speed);
 
-            % Ensure forward speed does not exceed max
-            forward_speed = min(max(forward_speed, 0), max_forward_speed);
+            forward_speed = 60;
 
             % --- Minor Heading Correction ---
             % Use the heading PID to make small adjustments while driving
@@ -204,8 +239,9 @@ try
             prev_error_h = heading_error;
             turn_speed = min(max(turn_speed, -max_turn_speed), max_turn_speed);
 
-            left_speed  = round(forward_speed - turn_speed);
-            right_speed = round(forward_speed + turn_speed);
+            left_speed  = round(forward_speed + turn_speed);
+            right_speed = round(forward_speed - turn_speed);
+    
         end
 
         % Final speed constraints
@@ -249,6 +285,7 @@ end
 % 4. CLEANUP
 % =======================================================================
 disp('Disconnecting NatNet client...');
+send_robot_command(robot_ip, 'S');
 natnetclient.disconnect;
 clear natnetclient;
 
