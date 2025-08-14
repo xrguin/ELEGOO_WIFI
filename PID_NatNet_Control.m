@@ -1,4 +1,4 @@
-function PID_NatNet_Control
+
 % =======================================================================
 % PID_NatNet_Control.m (3D XZ-Plane Control Version)
 %
@@ -26,7 +26,7 @@ end
 % =======================================================================
 
 % -- Robot Configuration
-robot_ip = "192.168.1.140"; % The IP address of your robot.
+robot_ip = "192.168.1.84"; % The IP address of your robot.
 
 % -- NatNet Server Configuration
 natnet_client_ip = '192.168.1.203';  % The IP of this computer (the client).
@@ -35,15 +35,41 @@ natnet_server_ip = '192.168.1.209'; % The IP of the computer running Motive (the
 % -- Target and Robot ID Configuration
 % IMPORTANT: All position values are in MILLIMETERS (mm).
 %target_pos = [-120, 34, -540]; % Target position [x, y, z] in MILLIMETERS.
-way_points = [1450 , 23, 707;...
-               1136, 25, 348;...
-               697, 33, -122;...
-               374, 34, -287;...
-               -133, 30, -415;...
-               -613, 33, -638;...
-               -748.5, 36, -1136.8;...
-               -713.8, 38, -1598.8;...
-               -972.4, 42, -2017.3];
+way_points = [1450, 23, 707;
+    1371.5, 23.5, 617.25;
+    1293, 24, 527.5;
+    1214.5, 24.5, 437.75;
+    1136, 25, 348;
+    1026.25, 27, 230.5;
+    916.5, 29, 113;
+    806.75, 31, -4.5;
+    697, 33, -122;
+    604.75, 33.25, -163.25;
+    512.5, 33.5, -204.5;
+    420.25, 33.75, -245.75;
+    374, 34, -287;
+    247.25, 33, -319;
+    120.5, 32, -351;
+    -6.25, 31, -383;
+    -133, 30, -415;
+    -243.25, 30.75, -470.75;
+    -353.5, 31.5, -526.5;
+    -463.75, 32.25, -582.25;
+    -613, 33, -638;
+    -649.625, 33.75, -762.7;
+    -686.25, 34.5, -887.4;
+    -722.875, 35.25, -1012.1;
+    -748.5, 36, -1136.8;
+    -722.475, 36.5, -1253.3;
+    -696.45, 37, -1370.8;
+    -670.425, 37.5, -1484.3;
+    -713.8, 38, -1598.8;
+    -778.45, 39, -1703.425;
+    -843.1, 40, -1808.05;
+    -907.75, 41, -1912.675;
+    -972.4, 42, -2017.3];
+
+way_points = way_points - [100, 0, 100]; 
 target_pos = way_points(end, :);
 robot_id = 1;                    % The Rigid Body ID of your robot in Motive.
 
@@ -56,7 +82,7 @@ Ki_d = 0.01; % Distance Integral Gain
 Kd_d = 0.1;  % Distance Derivative Gain
 
 % -- Control Loop & Physics Parameters
-distance_tolerance = 80;   % Stop when within 50 mm (5 cm) of the target.
+distance_tolerance = 100;   % Stop when within 50 mm (5 cm) of the target.
 heading_tolerance = 10;   % Allowable heading error in degrees to switch to DRIVING.
 max_turn_speed = 100;      % Maximum speed during turning (0-255).
 max_forward_speed = 60;   % Maximum speed when driving forward (0-255).
@@ -134,7 +160,7 @@ try
         data = natnetclient.getFrame;
         if isempty(data.RigidBodies), disp('No rigid bodies in frame...'); pause(0.01); continue; end
 
-        rb_data = data.RigidBodies(1);
+        rb_data = data.RigidBodies(2);
       %  for i = 1:length(data.RigidBodies)
       %      if (data.RigidBodies(i).ID == robot_id), rb_data = data.RigidBodies(i); break; end
       %  end
@@ -289,7 +315,7 @@ send_robot_command(robot_ip, 'S');
 natnetclient.disconnect;
 clear natnetclient;
 
-end
+
 
 % =======================================================================
 % 5. HELPER FUNCTION (LOCAL FUNCTION)
