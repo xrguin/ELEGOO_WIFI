@@ -1,0 +1,391 @@
+
+% =======================================================================
+% PID_NatNet_Control.m (3D XZ-Plane Control Version)
+%
+% This script integrates NatNet motion capture feedback with robot control
+% to autonomously drive a robot to a specified target position using PID.
+% This version operates in the X-Z plane, suitable for ground robots.
+% =======================================================================
+
+% This script is now a function. To run, type 'PID_NatNet_Control' in the command window.
+
+clc; close all;
+
+% =======================================================================
+% 0. SETUP - Load NatNet .NET Assembly
+% =======================================================================
+try
+    % NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
+    NET.addAssembly('D:\MATLAB_Local\NatNetSDK\lib\x64\NatNetML.dll');
+catch e
+    error(['Failed to load NatNetML.dll. Please ensure the path is correct ' ...
+           'and the .NET Framework is installed. Original error: %s'], e.message);
+end
+
+% =======================================================================
+% 1. CONFIGURATION - !!! USER MUST EDIT THIS SECTION !!!
+% =======================================================================
+
+% -- Robot Configuration
+robot_ip = "192.168.1.84"; % The IP address of your robot.
+
+% -- NatNet Server Configuration
+natnet_client_ip = '192.168.1.70';  % The IP of this computer (the client).
+natnet_server_ip = '192.168.1.209'; % The IP of the computer running Motive (the server).
+
+% -- Target and Robot ID Configuration
+% IMPORTANT: All position values are in MILLIMETERS (mm).
+%target_pos = [-120, 34, -540]; % Target position [x, y, z] in MILLIMETERS.
+% way_points = [1450 , 23, 707;...
+%                1136, 25, 348;...
+%                697, 33, -122;...
+%                374, 34, -287;...
+%                -133, 30, -415;...
+%                -613, 33, -638;...
+%                -748.5, 36, -1136.8;...
+%                -713.8, 38, -1598.8;...
+%                -972.4, 42, -2017.3];
+
+way_points = [1450, 23, 707;
+    1371.5, 23.5, 617.25;
+    1293, 24, 527.5;
+    1214.5, 24.5, 437.75;
+    1136, 25, 348;
+    1026.25, 27, 230.5;
+    916.5, 29, 113;
+    806.75, 31, -4.5;
+    697, 33, -122;
+    604.75, 33.25, -163.25;
+    512.5, 33.5, -204.5;
+    420.25, 33.75, -245.75;
+    374, 34, -287;
+    247.25, 33, -319;
+    120.5, 32, -351;
+    -6.25, 31, -383;
+    -133, 30, -415;
+    -243.25, 30.75, -470.75;
+    -353.5, 31.5, -526.5;
+    -463.75, 32.25, -582.25;
+    -613, 33, -638;
+    -649.625, 33.75, -762.7;
+    -686.25, 34.5, -887.4;
+    -722.875, 35.25, -1012.1;
+    -748.5, 36, -1136.8;
+    -722.475, 36.5, -1253.3;
+    -696.45, 37, -1370.8;
+    -670.425, 37.5, -1484.3;
+    -713.8, 38, -1598.8;
+    -778.45, 39, -1703.425;
+    -843.1, 40, -1808.05;
+    -907.75, 41, -1912.675;
+    -972.4, 42, -2017.3];
+
+way_points = way_points - [100, 0, 100]; 
+
+target_pos = way_points(end, :);
+robot_id = 1;                    % The Rigid Body ID of your robot in Motive.
+
+% -- PID Controller Gains (THESE WILL REQUIRE EXPERIMENTAL TUNING)
+Kp_h = 1.2;  % Heading Proportional Gain
+Ki_h = 0.03; % Heading Integral Gain
+Kd_h = 0.15;  % Heading Derivative Gain
+Kp_d = 0.25;  % Distance Proportional Gain
+Ki_d = 0.01; % Distance Integral Gain
+Kd_d = 0.1;  % Distance Derivative Gain
+
+% -- Control Loop & Physics Parameters
+distance_tolerance = 80;   % Stop when within 80 mm of the target.
+alignment_heading_tolerance = 12;  % Tight heading tolerance for alignment phase (degrees)
+normal_heading_tolerance = 10;    % Normal heading tolerance for waypoint tracking (degrees)
+max_turn_speed = 100;      % Maximum speed during turning (0-255).
+max_forward_speed = 80;    % Maximum speed when approaching first waypoint (0-255).
+constant_forward_speed = 60;  % Constant speed for waypoints 2 onwards (0-255).
+
+% =======================================================================
+% 2. INITIALIZATION
+% =======================================================================
+
+% -- Initialize NatNet Connection
+disp('Initializing NatNet Client...');
+natnetclient = natnet;
+natnetclient.HostIP = natnet_server_ip;
+natnetclient.ClientIP = natnet_client_ip;
+natnetclient.ConnectionType = 'Multicast';
+natnetclient.connect;
+if (natnetclient.IsConnected == 0), error('NatNet client failed to connect.'); end
+model = natnetclient.getModelDescription;
+if (model.RigidBodyCount < 1), error('No rigid bodies found in model.'); end
+disp('NatNet connection successful.');
+
+% -- Initialize 3D Plot
+figure;
+ax = axes;
+hold(ax, 'on'); grid on; axis equal;
+title('3D Robot Trajectory Control (XZ Plane)');
+xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('Z (mm)');
+view(ax, 0, 0); % Set view to Top-Down (X-Z plane)
+
+% Define and draw the 3D Boundary
+boundary_pts = [ 2467,   50,  148; ...
+                 1814,   65, -2659;
+                -1878,   37, -2732;
+                -1101,  6.8,  1769];
+closed_boundary = [boundary_pts; boundary_pts(1,:)];
+plot3(ax, closed_boundary(:,1), closed_boundary(:,2), closed_boundary(:,3), 'k-', 'LineWidth', 2);
+
+% Set axis limits to encompass the boundary with padding
+padding = 500; % mm
+xlim([min(boundary_pts(:,1)) - padding, max(boundary_pts(:,1)) + padding]);
+ylim([min(boundary_pts(:,2)) - padding, max(boundary_pts(:,2)) + padding]);
+zlim([min(boundary_pts(:,3)) - padding, max(boundary_pts(:,3)) + padding]);
+set(ax, 'ZDir', 'reverse');
+
+% -- Plot Handles
+h_target = plot3(ax, target_pos(1), target_pos(2), target_pos(3), 'r*', 'MarkerSize', 15, 'LineWidth', 2);
+if size(way_points, 1) > 1
+     plot3(ax, way_points(1:end-1, 1), way_points(1:end-1, 2), way_points(1:end-1, 3), 'bo',...
+      'MarkerSize', 10, 'MarkerFaceColor', 'b');
+end
+h_robot = plot3(ax, 0, 0, 0, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'k');
+h_robot_orientation = line(ax, [0 0], [0 0], [0 0], 'Color', 'r', 'LineWidth', 2);
+h_trajectory = plot3(ax, 0, 0, 0, 'b-');
+legend(ax, {'Target', 'Robot', 'Orientation', 'Trajectory'}, 'Location', 'best');
+
+% -- Initialize PID & Loop Variables
+integral_h = 0;
+prev_error_h = 0;
+integral_d = 0;
+prev_error_d = 0;
+trajectory_points = [];
+last_loop_time = tic;
+current_waypoint_index = 1;
+control_state = 'INITIAL_APPROACH'; % 4-phase control state
+alignment_pause_timer = 0;  % Timer for 2s pause in ALIGNMENT_PREP
+first_waypoint_reached = false;  % Flag to track if first waypoint has been reached
+
+disp('Initialization complete. Starting control loop...');
+
+% =======================================================================
+% 3. MAIN CONTROL LOOP
+% =======================================================================
+try
+    while true
+        dt = toc(last_loop_time);
+        last_loop_time = tic;
+
+        data = natnetclient.getFrame;
+        if isempty(data.RigidBodies), disp('No rigid bodies in frame...'); pause(0.01); continue; end
+
+        rb_data = data.RigidBodies(2);
+      %  for i = 1:length(data.RigidBodies)
+      %      if (data.RigidBodies(i).ID == robot_id), rb_data = data.RigidBodies(i); break; end
+      %  end
+      %  if isempty(rb_data), disp(['RB ID ', num2str(robot_id), ' not found...']); pause(0.01); continue; end
+
+        current_pos_3d = [rb_data.x, rb_data.y, rb_data.z] * 1000;
+
+        fprintf("x : %f,  y : %f  z:  %f\n",current_pos_3d(1),current_pos_3d(2),current_pos_3d(3));
+
+        q = quaternion(rb_data.qw, rb_data.qx, rb_data.qy, rb_data.qz);
+        angles = q.EulerAngles('YZX'); 
+        current_angle = rad2deg(angles(1)) + 230;
+        if current_angle >= 180
+            current_angle = -360 + current_angle;
+        end
+
+        % -- ERROR CALCULATION (in XZ plane)
+        current_target = way_points(current_waypoint_index, :);
+        error_vec_xz = [current_target(1) - current_pos_3d(1), current_target(3) - current_pos_3d(3)];
+        distance_error = norm(error_vec_xz);
+
+        % -- Check if waypoint reached
+        if distance_error < distance_tolerance
+            if current_waypoint_index == size(way_points, 1)
+                disp('Final target reached!');
+                send_robot_command(robot_ip, 'S');
+                break;
+            elseif current_waypoint_index == 1 && ~first_waypoint_reached
+                % First waypoint reached, transition to alignment
+                disp('First waypoint reached. Preparing for alignment...');
+                first_waypoint_reached = true;
+                control_state = 'ALIGNMENT_PREP';
+                alignment_pause_timer = tic;
+                % Reset PID integrals
+                integral_h = 0;
+                prev_error_h = 0;
+                integral_d = 0;
+                prev_error_d = 0;
+            elseif current_waypoint_index > 1
+                % Subsequent waypoints
+                disp(['Waypoint ', num2str(current_waypoint_index), ' reached. Moving to the next.']);
+                current_waypoint_index = current_waypoint_index + 1;
+            end
+        end
+
+        % Calculate heading to current or next waypoint based on state
+        if strcmp(control_state, 'ALIGNMENT_PREP') || strcmp(control_state, 'ALIGNING')
+            % During alignment, look at waypoint 2
+            next_target = way_points(2, :);
+            next_error_vec = [next_target(1) - current_pos_3d(1), next_target(3) - current_pos_3d(3)];
+            target_angle = rad2deg(atan2(next_error_vec(1), next_error_vec(2)));
+        else
+            % Normal operation, look at current waypoint
+            target_angle = rad2deg(atan2(error_vec_xz(1), error_vec_xz(2)));
+        end
+        
+        fprintf("State: %s | Target angle: %.1f | Current angle: %.1f\n", control_state, target_angle, current_angle);
+        heading_error = target_angle - current_angle;
+        heading_error = atan2(sin(deg2rad(heading_error)), cos(deg2rad(heading_error)));
+        heading_error = rad2deg(heading_error);
+
+        % -- 4-PHASE CONTROL SYSTEM --
+        forward_speed = 0;
+        turn_speed = 0;
+        left_speed = 0;
+        right_speed = 0;
+        
+        switch control_state
+            case 'INITIAL_APPROACH'
+                % Phase 1: Approaching first waypoint with full control
+                fprintf('Phase: INITIAL_APPROACH | Distance: %.1f mm\n', distance_error);
+                
+                % Distance-based speed control (proportional)
+                integral_d = integral_d + distance_error * dt;
+                derivative_d = (distance_error - prev_error_d) / dt;
+                forward_speed = Kp_d * distance_error + Ki_d * integral_d + Kd_d * derivative_d;
+                prev_error_d = distance_error;
+                forward_speed = min(max(forward_speed, 0), max_forward_speed);
+                
+                % Heading PID control
+                integral_h = integral_h + heading_error * dt;
+                derivative_h = (heading_error - prev_error_h) / dt;
+                turn_speed = Kp_h * heading_error + Ki_h * integral_h + Kd_h * derivative_h;
+                prev_error_h = heading_error;
+                turn_speed = min(max(turn_speed, -max_turn_speed), max_turn_speed);
+                
+                left_speed = round(forward_speed + turn_speed);
+                right_speed = round(forward_speed - turn_speed);
+                
+            case 'ALIGNMENT_PREP'
+                % Phase 2: Stop and wait for 2 seconds
+                fprintf('Phase: ALIGNMENT_PREP | Pausing for alignment...\n');
+                
+                % Stop the robot
+                left_speed = 0;
+                right_speed = 0;
+                
+                % Check if 2 seconds have passed
+                if toc(alignment_pause_timer) >= 1
+                    disp('Starting alignment to waypoint 2...');
+                    control_state = 'ALIGNING';
+                    current_waypoint_index = 2;  % Move to waypoint 2
+                    % Reset PID integrals for alignment
+                    integral_h = 0;
+                    prev_error_h = 0;
+                end
+                
+            case 'ALIGNING'
+                % Phase 3: Pure rotation to face waypoint 2
+                fprintf('Phase: ALIGNING | Heading error: %.1f deg\n', abs(heading_error));
+                
+                % Check if aligned within tight tolerance
+                if abs(heading_error) < alignment_heading_tolerance
+                    disp('Alignment complete. Starting normal operation...');
+                    control_state = 'NORMAL_OPERATION';
+                    % Reset PID integrals for normal operation
+                    integral_h = 0;
+                    prev_error_h = 0;
+                    integral_d = 0;
+                    prev_error_d = 0;
+                else
+                    % Heading PID for rotation only
+                    integral_h = integral_h + heading_error * dt;
+                    derivative_h = (heading_error - prev_error_h) / dt;
+                    turn_speed = Kp_h * heading_error + Ki_h * integral_h + Kd_h * derivative_h;
+                    prev_error_h = heading_error;
+                    turn_speed = min(max(turn_speed, -max_turn_speed), max_turn_speed);
+                    
+                    % Rotate in place (no forward speed)
+                    left_speed = round(turn_speed);
+                    right_speed = round(turn_speed);
+                end
+                
+            case 'NORMAL_OPERATION'
+                % Phase 4: Constant forward speed with heading corrections
+                fprintf('Phase: NORMAL_OPERATION | WP: %d | Distance: %.1f mm\n', ...
+                        current_waypoint_index, distance_error);
+                
+                % Constant forward speed
+                forward_speed = constant_forward_speed;
+                
+                % Heading PID for direction corrections
+                integral_h = integral_h + heading_error * dt;
+                derivative_h = (heading_error - prev_error_h) / dt;
+                turn_speed = Kp_h * heading_error + Ki_h * integral_h + Kd_h * derivative_h;
+                prev_error_h = heading_error;
+                turn_speed = min(max(turn_speed, -max_turn_speed), max_turn_speed);
+                
+                left_speed = round(forward_speed + turn_speed);
+                right_speed = round(forward_speed - turn_speed);
+        end
+
+        % Final speed constraints
+        left_speed  = round(min(max(left_speed, -255), 255))
+        right_speed = round(min(max(right_speed, -255), 255))
+
+        % Handle negative speeds for robots that support reverse
+        % Assuming positive values are forward, negative are backward.
+        % This part might need adjustment based on your robot's specific command protocol.
+        % For now, we just ensure speeds are within a valid PWM range (e.g., 0-255)
+        % and let the signs indicate direction.
+        
+        % This command structure might need to change if your robot needs
+        % separate direction pins. The current one assumes sign = direction.
+        json_command = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"pid"}', left_speed, right_speed);
+        send_robot_command(robot_ip, json_command);
+        
+        % -- VISUALIZATION UPDATE (in 3D)
+        set(h_robot, 'XData', current_pos_3d(1), 'YData', current_pos_3d(2), 'ZData', current_pos_3d(3));
+        orientation_length = 250;
+        current_angle1 = deg2rad(current_angle);
+        orientation_end_pos = [current_pos_3d(1) + orientation_length * cos(deg2rad(current_angle1)), ...
+                               current_pos_3d(2), ...
+                               current_pos_3d(3) + orientation_length * sin(deg2rad(current_angle1)-pi)];
+        set(h_robot_orientation, 'XData', [current_pos_3d(1), orientation_end_pos(1)], ...
+                               'YData', [current_pos_3d(2), orientation_end_pos(2)], ...
+                               'ZData', [current_pos_3d(3), orientation_end_pos(3)]);
+        
+        trajectory_points(:, end+1) = current_pos_3d;
+        set(h_trajectory, 'XData', trajectory_points(1,:), 'YData', trajectory_points(2,:), 'ZData', trajectory_points(3,:));
+        drawnow limitrate;
+    end
+catch e
+    disp('An error occurred. Stopping robot and disconnecting.');
+    send_robot_command(robot_ip, 'S');
+    natnetclient.disconnect;
+    rethrow(e);
+end
+
+% =======================================================================
+% 4. CLEANUP
+% =======================================================================
+disp('Disconnecting NatNet client...');
+send_robot_command(robot_ip, 'S');
+natnetclient.disconnect;
+clear natnetclient;
+
+
+% =======================================================================
+% 5. HELPER FUNCTION (LOCAL FUNCTION)
+% =======================================================================
+function response = send_robot_command(ip, command)
+    try
+        t = tcpclient(ip, 80, 'ConnectTimeout', 1);
+        data_to_send = [char(command), newline];
+        write(t, data_to_send);
+        response = 'OK';
+        clear t;
+    catch e
+        response = ['Error: ', e.message];
+    end
+end
