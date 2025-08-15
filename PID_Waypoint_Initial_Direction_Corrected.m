@@ -16,7 +16,7 @@ clc; close all;
 % =======================================================================
 try
     % NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
-    NET.addAssembly('D:\MATLAB_Local\NatNetSDK\lib\x64\NatNetML.dll');
+    NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
 catch e
     error(['Failed to load NatNetML.dll. Please ensure the path is correct ' ...
            'and the .NET Framework is installed. Original error: %s'], e.message);
@@ -30,7 +30,7 @@ end
 robot_ip = "192.168.1.84"; % The IP address of your robot.
 
 % -- NatNet Server Configuration
-natnet_client_ip = '192.168.1.70';  % The IP of this computer (the client).
+natnet_client_ip = '192.168.1.203';  % The IP of this computer (the client).
 natnet_server_ip = '192.168.1.209'; % The IP of the computer running Motive (the server).
 
 % -- Target and Robot ID Configuration
@@ -330,8 +330,8 @@ try
         end
 
         % Final speed constraints
-        left_speed  = round(min(max(left_speed, -255), 255))
-        right_speed = round(min(max(right_speed, -255), 255))
+        left_speed  = round(min(max(left_speed, -255), 255));
+        right_speed = round(min(max(right_speed, -255), 255));
 
         % Handle negative speeds for robots that support reverse
         % Assuming positive values are forward, negative are backward.
@@ -341,8 +341,17 @@ try
         
         % This command structure might need to change if your robot needs
         % separate direction pins. The current one assumes sign = direction.
-        json_command = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"pid"}', left_speed, right_speed);
-        send_robot_command(robot_ip, json_command);
+        if strcmp(control_state, 'ALIGNING')
+           % if left_speed > 0
+           %     json_command = sprintf('{"N":3,"D1":2,"D2":%d,"H":"pid"}', left_speed);
+           % else
+                json_command = sprintf('{"N":3,"D1":1,"D2":%d,"H":"pid"}', 75);
+            %end
+            send_robot_command(robot_ip, json_command);
+        else
+            json_command = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"pid"}', left_speed, right_speed);
+            send_robot_command(robot_ip, json_command);
+        end
         
         % -- VISUALIZATION UPDATE (in 3D)
         set(h_robot, 'XData', current_pos_3d(1), 'YData', current_pos_3d(2), 'ZData', current_pos_3d(3));
