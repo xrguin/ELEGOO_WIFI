@@ -1,19 +1,15 @@
-function apf_waypoint_pid
 % =======================================================================
-% apf_waypoint_pid.m
-%
-% This script has been modified to control TWO robots simultaneously using
-% an Artificial Potential Field (APF) algorithm for obstacle avoidance.
-%
+% apf_waypoint_pid.m (V4 - Integrated Trajectory Generation)
+% 
+% This script first generates collision-free paths for two robots offline
+% using an Artificial Potential Field (APF) method. Then, it connects to
+% the robots and controls them along these pre-computed paths.
+% 
 % Key Features:
-% - Connects to OptiTrack (NatNet) for live pose data of two robots.
-% - Uses `generateInterceptingPathSimple` to create goals for both robots.
-% - APF calculates a desired heading based on attraction to a goal and
-%   repulsion from the other robot.
-% - A dynamic, temporary waypoint is generated based on the APF heading.
-% - A PID controller steers the robot towards the temporary waypoint while
-%   maintaining a constant base forward speed.
-% - Commands are sent to each robot via TCP/IP.
+% - Offline APF trajectory generation based on defined start/goal points.
+% - Real-time PID control to follow the generated waypoints.
+% - Real-time APF for minor corrections and avoiding unexpected obstacles.
+% - Confinement to a specific area with "Virtual Wall" forces.
 % =======================================================================
 
 clc; close all;
@@ -22,7 +18,7 @@ clc; close all;
 % 0. SETUP - Load NatNet .NET Assembly
 % =======================================================================
 try
-    NET.addAssembly('D:\MATLAB_Local\NatNetSDK\lib\x64\NatNetML.dll');
+    NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
 catch e
     error(['Failed to load NatNetML.dll. Please ensure the path is correct ' ...
            'and the .NET Framework is installed. Original error: %s'], e.message);
@@ -33,42 +29,65 @@ end
 % =======================================================================
 
 % -- Robot Configuration
-robot_ips = {"192.168.1.140", "192.168.1.141"}; % IPs for Robot 1 and Robot 2
+robot_ips = {"192.168.1.140", "192.168.1.84"}; % IP for Robot 1 (ID 1) and Robot 2 (ID 2)
 robot_ids = [1, 2];                             % Rigid Body IDs for Robot 1 and 2 in Motive
 
 % -- NatNet Server Configuration
-natnet_client_ip = '192.168.1.70';
+natnet_client_ip = '192.168.1.203';
 natnet_server_ip = '192.168.1.209';
 
-% -- Coordinate System Transformation (from OptiTrack to Simulator)
-% This script uses a 2D coordinate system for APF calculations.
-% new_X = optitrack_Z + z_offset
-% new_Y = optitrack_X + x_offset
+% -- Coordinate System & Boundary Definition --
 x_offset = 2200; % Amount to add to OptiTrack X to get Simulator Y (mm)
 z_offset = 2400; % Amount to add to OptiTrack Z to get Simulator X (mm)
+opti_x_min = -1878; opti_x_max = 2467;
+opti_z_min = -2732; opti_z_max = 1769;
+sim_x_min = opti_z_min + z_offset; % -332
+sim_x_max = opti_z_max + z_offset; % 4169
+sim_y_min = opti_x_min + x_offset; % 322
+sim_y_max = opti_x_max + x_offset; % 4667
 
-% -- APF & Path Generation Parameters (all units in mm)
-attraction_factor = 1.0;
-repulsion_factor = 1.5;
-detection_radius = 1000; % APF repulsion activates within this radius (1m)
-safe_radius = 300;       % Safety radius for path generation (0.3m)
-dynamic_waypoint_distance = 200; % How far ahead to set the temp waypoint (mm)
+% -- OFFLINE Trajectory Generation CONFIG --
+start_pos_1 = [500, 1000];
+goal_pos_1  = [3500, 3000];
+start_pos_2 = [3500, 1000];
+goal_pos_2  = [500, 3000];
 
-% -- PID Controller Gains (Shared for both robots, tune as needed)
-Kp_h = 0.85;  % Heading Proportional Gain
-Ki_h = 0.03;  % Heading Integral Gain
-Kd_h = 0.15;  % Heading Derivative Gain
+gen_config.attraction_factor = 0.01;
+gen_config.repulsion_factor_robot = 5; % Adjusted for the new, more effective repulsion formula
+gen_config.repulsion_factor_wall = 300;
+gen_config.detection_radius_robot = 1000;
+gen_config.detection_radius_wall = 400;
+gen_config.step_size = 50;
+gen_config.goal_tolerance = 100;
+gen_config.max_steps = 500;
+gen_config.sim_bounds = [sim_x_min, sim_x_max, sim_y_min, sim_y_max];
 
-% -- Control & Physics Parameters
-distance_tolerance = 100;  % Stop when within 100 mm (10 cm) of the final goal.
-base_forward_speed = 70;   % Constant base speed when driving (0-255).
-max_turn_component = 50;   % Max speed adjustment for turning.
+% -- REAL-TIME APF Parameters (for robot control)
+rt_config.repulsion_factor_robot = 2.0;
+rt_config.repulsion_factor_wall = 2.5;
+rt_config.detection_radius_robot = 800;
+rt_config.detection_radius_wall = 400;
+
+% -- PID Controller Gains
+pid_gains.Kp_h = 1.2;  pid_gains.Ki_h = 0.03; pid_gains.Kd_h = 0.15;
+pid_gains.Kp_d = 0.25; pid_gains.Ki_d = 0.01; pid_gains.Kd_d = 0.1;
+
+% -- Control Loop & Physics Parameters
+control_params.distance_tolerance = 80;
+control_params.alignment_heading_tolerance = 12;
+control_params.max_turn_speed = 60;
+control_params.max_forward_speed = 80;
+control_params.constant_forward_speed = 60;
 
 % =======================================================================
 % 2. INITIALIZATION
 % =======================================================================
 
-% -- Initialize NatNet Connection
+% -- Step 1: Generate Trajectories Offline --
+disp('Generating APF trajectories offline...');
+[waypoints1, waypoints2] = generate_apf_trajectories(start_pos_1, goal_pos_1, start_pos_2, goal_pos_2, gen_config);
+
+% -- Step 2: Initialize NatNet Connection --
 disp('Initializing NatNet Client...');
 natnetclient = natnet;
 natnetclient.HostIP = natnet_server_ip;
@@ -80,50 +99,451 @@ model = natnetclient.getModelDescription;
 if (model.RigidBodyCount < 2), error('This script requires at least 2 rigid bodies.'); end
 disp('NatNet connection successful.');
 
-% -- Path Generation (in Simulator Coordinates)
-disp('Generating intercepting paths for robots...');
-% Arena bounds (in mm, used for placing start/goal points)
-x_bound_gen = 2000;
-y_bound_gen = 2000;
-min_path_length = 1500;
-
-% Generate paths using helper functions
-[start1_sim, goal1_sim] = generate_random_path(x_bound_gen, y_bound_gen, min_path_length);
-[start2_sim, goal2_sim, ~] = generateInterceptingPathSimple(start1_sim, goal1_sim, ...
-    x_bound_gen, y_bound_gen, min_path_length, safe_radius * 2);
-
-goals_sim = [goal1_sim, goal2_sim]; % Store goals in a 2x2 matrix [x1, x2; y1, y2]
-
-fprintf('Robot 1 Path (Sim Coords): Start [%.0f, %.0f], Goal [%.0f, %.0f]\n', start1_sim(1), start1_sim(2), goal1_sim(1), goal1_sim(2));
-fprintf('Robot 2 Path (Sim Coords): Start [%.0f, %.0f], Goal [%.0f, %.0f]\n', start2_sim(1), start2_sim(2), goal2_sim(1), goal2_sim(2));
-
-% -- Initialize 2D Plot
+% -- Step 3: Initialize 2D Plot for Real-Time Control --
 figure;
 ax = axes;
 hold(ax, 'on'); grid on; axis equal;
-title('Dual Robot APF Control');
+title('Dual Robot Bounded APF Control');
 xlabel('Simulator X (mm)'); ylabel('Simulator Y (mm)');
-view(ax, 2); % Set to 2D view
+view(ax, 2);
+boundary_rect = [sim_x_min, sim_y_min, sim_x_max-sim_x_min, sim_y_max-sim_y_min];
+rectangle(ax, 'Position', boundary_rect, 'EdgeColor', 'k', 'LineWidth', 2, 'LineStyle', '--');
 
-% -- Plot Handles
-h_goal1 = plot(ax, goal1_sim(1), goal1_sim(2), 'gp', 'MarkerSize', 15, 'MarkerFaceColor', 'g');
-h_goal2 = plot(ax, goal2_sim(1), goal2_sim(2), 'bp', 'MarkerSize', 15, 'MarkerFaceColor', 'b');
-h_robot1 = plot(ax, 0, 0, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'g');
-h_robot2 = plot(ax, 0, 0, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'b');
-h_traj1 = plot(ax, NaN, NaN, 'g-'); % Use NaN to initialize empty plot
-h_traj2 = plot(ax, NaN, NaN, 'b-');
-h_temp_wp1 = plot(ax, 0, 0, 'gx', 'MarkerSize', 8); % Temporary waypoint for Robot 1
-h_temp_wp2 = plot(ax, 0, 0, 'bx', 'MarkerSize', 8); % Temporary waypoint for Robot 2
-legend(ax, {'Goal 1', 'Goal 2', 'Robot 1', 'Robot 2', 'Traj 1', 'Traj 2', 'Temp WP1', 'Temp WP2'}, 'Location', 'best');
+% -- Step 4: Initialize Robot Structs and Plot Handles --
+colors = ['g', 'b'];
+robots = struct('ip', [], 'id', [], 'waypoints', [], 'pos', [], 'angle', [], ...
+                'state', [], 'current_waypoint_index', [], 'integral_h', [], ...
+                'prev_error_h', [], 'integral_d', [], 'prev_error_d', [], ...
+                'alignment_pause_timer', [], ...
+                'trajectory', [], 'h_robot', [], 'h_orient', [], 'h_traj', [], ...
+                'h_waypoints', [], 'h_target', []);
 
-% -- Initialize PID & Loop Variables for TWO robots
-integral_h = [0, 0];
-prev_error_h = [0, 0];
-trajectory_points_1 = zeros(2, 0);  % Initialize as 2x0 empty array
-trajectory_points_2 = zeros(2, 0);  % Initialize as 2x0 empty array
+for i = 1:2
+    robots(i).ip = robot_ips{i};
+    robots(i).id = robot_ids(i);
+    if i == 1, robots(i).waypoints = waypoints1; else, robots(i).waypoints = waypoints2; end
+    robots(i).pos = [0; 0];
+    robots(i).angle = 0;
+    robots(i).state = 'INITIAL_APPROACH'; % Start with approaching the first waypoint
+    robots(i).current_waypoint_index = 1;
+    robots(i).integral_h = 0;
+    robots(i).prev_error_h = 0;
+    robots(i).integral_d = 0;
+    robots(i).prev_error_d = 0;
+    robots(i).alignment_pause_timer = tic; % Initialize timer
+    robots(i).trajectory = zeros(2, 0);
+
+    % Plot handles
+    target_pos = robots(i).waypoints(end, :);
+    robots(i).h_target = plot(ax, target_pos(1), target_pos(2), [colors(i) 'p'], 'MarkerSize', 15, 'MarkerFaceColor', colors(i));
+    robots(i).h_waypoints = plot(ax, robots(i).waypoints(1:end-1, 1), robots(i).waypoints(1:end-1, 2), [colors(i) 'o'], 'MarkerSize', 8, 'MarkerFaceColor', colors(i));
+    robots(i).h_robot = plot(ax, 0, 0, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', colors(i));
+    robots(i).h_orient = line(ax, [0 0], [0 0], 'Color', 'r', 'LineWidth', 2);
+    robots(i).h_traj = plot(ax, NaN, NaN, [colors(i) '-']);
+end
+
 last_loop_time = tic;
-
 disp('Initialization complete. Starting control loop...');
+
+% =======================================================================
+% 3. MAIN CONTROL LOOP (Pure PID Waypoint Following with Sync Start)
+% =======================================================================
+try
+    while true
+        dt = toc(last_loop_time);
+        last_loop_time = tic;
+
+        frame = natnetclient.getFrame;
+        if isempty(frame.RigidBodies), disp('No rigid bodies in frame...'); pause(0.01); continue; end
+
+        % --- Find and validate data for both robots ---
+        rb_data = cell(1, 2);
+        found_robots = 0;
+        for i = 1:2
+            for j = 1:2
+                if frame.RigidBodies(i).ID == robots(j).id
+                    rb_data{j} = frame.RigidBodies(i);
+                    found_robots = found_robots + 1;
+                end
+            end
+        end
+        if found_robots < 2, disp('Waiting for both robots to be tracked...'); pause(0.1); continue; end
+
+        % --- Update kinematics for both robots ---
+        for i = 1:2
+            pos_opti = [rb_data{i}.x, rb_data{i}.y, rb_data{i}.z] * 1000;
+            q = quaternion(rb_data{i}.qw, rb_data{i}.qx, rb_data{i}.qy, rb_data{i}.qz);
+            angles = q.EulerAngles('ZYX');
+            robots(i).pos = [pos_opti(3) + z_offset; pos_opti(1) + x_offset];
+            robots(i).angle = wrapToPi(deg2rad(rad2deg(angles(2)) + 230));
+        end
+
+        % --- Check for Overall Goal Reached ---
+        if strcmp(robots(1).state, 'FINISHED') && strcmp(robots(2).state, 'FINISHED')
+            disp('Both robots reached their final goals!');
+            send_robot_command(robots(1).ip, 'S'); send_robot_command(robots(2).ip, 'S');
+            break;
+        end
+
+        % --- SYNCHRONIZATION LOGIC ---
+        if strcmp(robots(1).state, 'READY_TO_GO') && strcmp(robots(2).state, 'READY_TO_GO')
+            disp('Both robots aligned! Starting synchronized movement.');
+            for i = 1:2
+                robots(i).state = 'NORMAL_OPERATION';
+                robots(i).current_waypoint_index = 2; % Start moving to the 2nd waypoint
+                robots(i).integral_h = 0; robots(i).prev_error_h = 0;
+                robots(i).integral_d = 0; robots(i).prev_error_d = 0;
+            end
+        end
+
+        % --- Main logic loop for each robot ---
+        for i = 1:2
+            robot = robots(i);
+            
+            if strcmp(robot.state, 'FINISHED'), continue; end
+
+            % --- Error Calculation ---
+            current_target_pos = robot.waypoints(robot.current_waypoint_index, :)';
+            distance_error = norm(robot.pos - current_target_pos);
+
+            % --- Waypoint Reached Logic ---
+            if distance_error < control_params.distance_tolerance && ~strcmp(robot.state, 'ALIGNING') && ~strcmp(robot.state, 'ALIGNMENT_PREP')
+                if robot.current_waypoint_index == size(robot.waypoints, 1)
+                    disp(['Robot ', num2str(robot.id), ' reached FINAL target!']);
+                    robot.state = 'FINISHED';
+                    send_robot_command(robot.ip, 'S');
+                elseif robot.current_waypoint_index == 1
+                    disp(['Robot ', num2str(robot.id), ' reached first waypoint. Preparing for alignment...']);
+                    robot.state = 'ALIGNMENT_PREP';
+                    robot.alignment_pause_timer = tic;
+                    robot.integral_h = 0; robot.prev_error_h = 0;
+                    robot.integral_d = 0; robot.prev_error_d = 0;
+                else
+                    disp(['Robot ', num2str(robot.id), ' reached waypoint ', num2str(robot.current_waypoint_index), '.']);
+                    robot.current_waypoint_index = robot.current_waypoint_index + 1;
+                end
+            end
+            
+            % --- Pure Heading Calculation (No APF) ---
+            target_vec = [0; 0];
+            if strcmp(robot.state, 'ALIGNMENT_PREP') || strcmp(robot.state, 'ALIGNING')
+                if size(robot.waypoints, 1) >= 2
+                    next_target_pos = robot.waypoints(2, :)';
+                    target_vec = next_target_pos - robot.pos;
+                else 
+                    target_vec = robot.waypoints(1, :)' - robot.pos;
+                end
+            else
+                target_vec = current_target_pos - robot.pos;
+            end
+            
+            target_angle = atan2(target_vec(2), target_vec(1));
+            heading_error = wrapToPi(target_angle - robot.angle);
+            heading_error_deg = rad2deg(heading_error);
+
+            % --- State Machine for Motor Control ---
+            forward_speed = 0; turn_speed = 0;
+            
+            switch robot.state
+                case 'INITIAL_APPROACH'
+                    robot.integral_d = robot.integral_d + distance_error * dt;
+                    derivative_d = (distance_error - robot.prev_error_d) / dt;
+                    forward_speed = pid_gains.Kp_d * distance_error + pid_gains.Ki_d * robot.integral_d + pid_gains.Kd_d * derivative_d;
+                    robot.prev_error_d = distance_error;
+                    
+                    robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                    derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                    turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                    robot.prev_error_h = heading_error_deg;
+
+                case 'ALIGNMENT_PREP'
+                    forward_speed = 0; turn_speed = 0; % Stop
+                    if toc(robot.alignment_pause_timer) >= 1.0 % Wait for 1 sec
+                        disp(['Robot ', num2str(robot.id), ' starting alignment...']);
+                        robot.state = 'ALIGNING';
+                        robot.integral_h = 0; robot.prev_error_h = 0;
+                    end
+                    
+                case 'ALIGNING'
+                    forward_speed = 0; % Pure rotation
+                    if abs(heading_error_deg) < control_params.alignment_heading_tolerance
+                        disp(['Robot ', num2str(robot.id), ' alignment complete. Waiting for other robot...']);
+                        robot.state = 'READY_TO_GO';
+                    else
+                        robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                        derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                        turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                        robot.prev_error_h = heading_error_deg;
+                    end
+
+                case 'READY_TO_GO'
+                    forward_speed = 0; turn_speed = 0; % Wait
+
+                case 'NORMAL_OPERATION'
+                    forward_speed = control_params.constant_forward_speed;
+                    robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                    derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                    turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                    robot.prev_error_h = heading_error_deg;
+            end
+
+            % --- Motor Command Generation (Strictly matching single-robot script) ---
+            json_command = '';
+            if strcmp(robot.state, 'ALIGNING')
+                % Special hardcoded command for alignment, as in the reference script
+                json_command = sprintf('{"N":3,"D1":1,"D2":%d,"H":"pid"}', 75);
+            else
+                % Standard PID speed calculation for all other moving states
+                forward_speed = min(max(forward_speed, 0), control_params.max_forward_speed);
+                turn_speed = min(max(turn_speed, -control_params.max_turn_speed), control_params.max_turn_speed);
+                
+                left_speed = round(forward_speed + turn_speed);
+                right_speed = round(forward_speed - turn_speed);
+
+                left_speed  = round(min(max(left_speed, -255), 255));
+                right_speed = round(min(max(right_speed, -255), 255));
+                
+                json_command = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"pid"}', left_speed, right_speed);
+            end
+
+            if ~strcmp(robot.state, 'FINISHED') && ~strcmp(robot.state, 'READY_TO_GO')
+                 if ~(strcmp(robot.state, 'ALIGNMENT_PREP') && toc(robot.alignment_pause_timer) < 1.0)
+                    send_robot_command(robot.ip, json_command);
+                 else
+                    send_robot_command(robot.ip, 'S'); % Send stop during prep pause
+                 end
+            end
+
+            robots(i) = robot;
+
+            % --- Update Visualization ---
+            set(robots(i).h_robot, 'XData', robot.pos(1), 'YData', robot.pos(2));
+            orientation_length = 250;
+            orient_end = robot.pos + orientation_length * [cos(robot.angle); sin(robot.angle)];
+            set(robots(i).h_orient, 'XData', [robot.pos(1), orient_end(1)], 'YData', [robot.pos(2), orient_end(2)]);
+            robots(i).trajectory(:, end+1) = robot.pos;
+            set(robots(i).h_traj, 'XData', robots(i).trajectory(1,:), 'YData', robots(i).trajectory(2,:));
+        end
+        drawnow limitrate;
+    end
+catch e
+    disp('An error occurred. Stopping robots and disconnecting.');
+    send_robot_command(robots(1).ip, 'S');
+    send_robot_command(robots(2).ip, 'S');
+    natnetclient.disconnect;
+    rethrow(e);
+end
+
+% =======================================================================
+% 3. MAIN CONTROL LOOP (with Synchronized Start Logic)
+% =======================================================================
+try
+    while true
+        dt = toc(last_loop_time);
+        last_loop_time = tic;
+
+        frame = natnetclient.getFrame;
+        if isempty(frame.RigidBodies), disp('No rigid bodies in frame...'); pause(0.01); continue; end
+
+        % --- Find and validate data for both robots ---
+        rb_data = cell(1, 2);
+        found_robots = 0;
+        for i = 1:2
+            for j = 1:2
+                if frame.RigidBodies(i).ID == robots(j).id
+                    rb_data{j} = frame.RigidBodies(i);
+                    found_robots = found_robots + 1;
+                end
+            end
+        end
+        if found_robots < 2, disp('Waiting for both robots to be tracked...'); pause(0.1); continue; end
+
+        % --- Update kinematics for both robots ---
+        for i = 1:2
+            pos_opti = [rb_data{i}.x, rb_data{i}.y, rb_data{i}.z] * 1000;
+            q = quaternion(rb_data{i}.qw, rb_data{i}.qx, rb_data{i}.qy, rb_data{i}.qz);
+            angles = q.EulerAngles('ZYX');
+            robots(i).pos = [pos_opti(3) + z_offset; pos_opti(1) + x_offset];
+            robots(i).angle = wrapToPi(deg2rad(rad2deg(angles(2)) + 230));
+        end
+
+        % --- Check for Overall Goal Reached ---
+        dist1 = norm(robots(1).pos - robots(1).waypoints(end, :)');
+        dist2 = norm(robots(2).pos - robots(2).waypoints(end, :)');
+        if dist1 < control_params.distance_tolerance && dist2 < control_params.distance_tolerance
+            disp('Both robots reached their final goals!');
+            send_robot_command(robots(1).ip, 'S'); send_robot_command(robots(2).ip, 'S');
+            break;
+        end
+
+        % --- SYNCHRONIZATION LOGIC ---
+        if strcmp(robots(1).state, 'READY_TO_GO') && strcmp(robots(2).state, 'READY_TO_GO')
+            disp('Both robots aligned! Starting synchronized movement.');
+            for i = 1:2
+                robots(i).state = 'NORMAL_OPERATION';
+                robots(i).integral_h = 0; robots(i).prev_error_h = 0;
+                robots(i).integral_d = 0; robots(i).prev_error_d = 0;
+            end
+        end
+
+        % --- Main logic loop for each robot ---
+        for i = 1:2
+            robot = robots(i);
+            other_robot = robots(3-i);
+
+            if robot.current_waypoint_index > size(robot.waypoints, 1)
+                send_robot_command(robot.ip, 'S'); continue;
+            end
+            
+            % --- Error Calculation ---
+            current_target_pos = robot.waypoints(robot.current_waypoint_index, :)';
+            distance_error = norm(robot.pos - current_target_pos);
+
+            % --- Waypoint Reached Logic ---
+            if distance_error < control_params.distance_tolerance && ~strcmp(robot.state, 'ALIGNING')
+                if robot.current_waypoint_index == size(robot.waypoints, 1)
+                    disp(['Robot ', num2str(robot.id), ' reached FINAL target!']);
+                    robot.state = 'FINISHED';
+                    robot.current_waypoint_index = robot.current_waypoint_index + 1;
+                    send_robot_command(robot.ip, 'S');
+                elseif robot.current_waypoint_index == 1 && ~strcmp(robot.state, 'ALIGNMENT_PREP')
+                    disp(['Robot ', num2str(robot.id), ' reached first waypoint. Preparing for alignment...']);
+                    robot.state = 'ALIGNMENT_PREP';
+                    robot.alignment_pause_timer = tic;
+                    robot.integral_h = 0; robot.prev_error_h = 0;
+                    robot.integral_d = 0; robot.prev_error_d = 0;
+                else
+                    disp(['Robot ', num2str(robot.id), ' reached waypoint ', num2str(robot.current_waypoint_index), '.']);
+                    robot.current_waypoint_index = robot.current_waypoint_index + 1;
+                end
+            end
+            
+            % --- Heading Calculation ---
+            target_vec = [0; 0];
+            if strcmp(robot.state, 'ALIGNMENT_PREP') || strcmp(robot.state, 'ALIGNING')
+                % Look at the next waypoint to align
+                if size(robot.waypoints, 1) >= 2
+                    next_target_pos = robot.waypoints(2, :)';
+                    target_vec = next_target_pos - robot.pos;
+                else % Edge case: path has only one point
+                    target_vec = robot.waypoints(1, :)' - robot.pos;
+                end
+            else
+                % Default: look at the current target
+                target_vec = current_target_pos - robot.pos;
+            end
+
+            % --- Real-time APF Application (only in normal operation) ---
+            F_total = target_vec;
+            if strcmp(robot.state, 'NORMAL_OPERATION')
+                F_att = target_vec;
+                % Repulsive force from other robot
+                F_rep_robot = [0; 0];
+                obstacle_vector = robot.pos - other_robot.pos;
+                dist_to_obstacle = norm(obstacle_vector);
+                if dist_to_obstacle <= rt_config.detection_radius_robot && dist_to_obstacle > 1e-6
+                    F_rep_magnitude = rt_config.repulsion_factor_robot * (rt_config.detection_radius_robot - dist_to_obstacle) / dist_to_obstacle;
+                    F_rep_robot = (obstacle_vector / dist_to_obstacle) * F_rep_magnitude;
+                end
+                % Repulsive force from walls
+                F_rep_wall = [0; 0];
+                if robot.pos(1) < sim_x_min + rt_config.detection_radius_wall, F_rep_wall(1) = F_rep_wall(1) + rt_config.repulsion_factor_wall * (1 - (robot.pos(1) - sim_x_min)/rt_config.detection_radius_wall); end
+                if robot.pos(1) > sim_x_max - rt_config.detection_radius_wall, F_rep_wall(1) = F_rep_wall(1) - rt_config.repulsion_factor_wall * (1 - (sim_x_max - robot.pos(1))/rt_config.detection_radius_wall); end
+                if robot.pos(2) < sim_y_min + rt_config.detection_radius_wall, F_rep_wall(2) = F_rep_wall(2) + rt_config.repulsion_factor_wall * (1 - (robot.pos(2) - sim_y_min)/rt_config.detection_radius_wall); end
+                if robot.pos(2) > sim_y_max - rt_config.detection_radius_wall, F_rep_wall(2) = F_rep_wall(2) - rt_config.repulsion_factor_wall * (1 - (sim_y_max - robot.pos(2))/rt_config.detection_radius_wall); end
+                
+                F_total = F_att + F_rep_robot + F_rep_wall;
+            end
+            
+            target_angle = atan2(F_total(2), F_total(1));
+            heading_error = wrapToPi(target_angle - robot.angle);
+            heading_error_deg = rad2deg(heading_error);
+
+            % --- State Machine for Motor Control ---
+            forward_speed = 0; turn_speed = 0;
+            
+            switch robot.state
+                case 'INITIAL_APPROACH'
+                    robot.integral_d = robot.integral_d + distance_error * dt;
+                    derivative_d = (distance_error - robot.prev_error_d) / dt;
+                    forward_speed = pid_gains.Kp_d * distance_error + pid_gains.Ki_d * robot.integral_d + pid_gains.Kd_d * derivative_d;
+                    robot.prev_error_d = distance_error;
+                    
+                    robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                    derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                    turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                    robot.prev_error_h = heading_error_deg;
+
+                case 'ALIGNMENT_PREP'
+                    forward_speed = 0; turn_speed = 0; % Stop
+                    if toc(robot.alignment_pause_timer) >= 1.0 % Wait for 1 sec
+                        disp(['Robot ', num2str(robot.id), ' starting alignment...']);
+                        robot.state = 'ALIGNING';
+                        robot.integral_h = 0; robot.prev_error_h = 0;
+                    end
+                    
+                case 'ALIGNING'
+                    forward_speed = 0; % Pure rotation
+                    if abs(heading_error_deg) < control_params.alignment_heading_tolerance
+                        disp(['Robot ', num2str(robot.id), ' alignment complete. Waiting for other robot...']);
+                        robot.state = 'READY_TO_GO';
+                    else
+                        robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                        derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                        turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                        robot.prev_error_h = heading_error_deg;
+                    end
+
+                case 'READY_TO_GO'
+                    forward_speed = 0; turn_speed = 0; % Wait
+
+                case 'NORMAL_OPERATION'
+                    forward_speed = control_params.constant_forward_speed;
+                    robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                    derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                    turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                    robot.prev_error_h = heading_error_deg;
+            end
+
+            % --- Motor Command Generation ---
+            forward_speed = min(max(forward_speed, 0), control_params.max_forward_speed);
+            turn_speed = min(max(turn_speed, -control_params.max_turn_speed), control_params.max_turn_speed);
+            
+            if strcmp(robot.state, 'ALIGNING')
+                left_speed = round(turn_speed);
+                right_speed = round(-turn_speed); % In-place rotation
+            else
+                left_speed = round(forward_speed - turn_speed); % Adjusted for standard differential drive
+                right_speed = round(forward_speed + turn_speed);
+            end
+
+            left_speed  = round(min(max(left_speed, -255), 255));
+            right_speed = round(min(max(right_speed, -255), 255));
+
+            if ~strcmp(robot.state, 'FINISHED')
+                json_command = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"pid"}', left_speed, right_speed);
+                send_robot_command(robot.ip, json_command);
+            end
+
+            robots(i) = robot;
+
+            % --- Update Visualization ---
+            set(robots(i).h_robot, 'XData', robot.pos(1), 'YData', robot.pos(2));
+            orientation_length = 250;
+            orient_end = robot.pos + orientation_length * [cos(robot.angle); sin(robot.angle)];
+            set(robots(i).h_orient, 'XData', [robot.pos(1), orient_end(1)], 'YData', [robot.pos(2), orient_end(2)]);
+            robots(i).trajectory(:, end+1) = robot.pos;
+            set(robots(i).h_traj, 'XData', robots(i).trajectory(1,:), 'YData', robots(i).trajectory(2,:));
+        end
+        drawnow limitrate;
+    end
+catch e
+    disp('An error occurred. Stopping robots and disconnecting.');
+    send_robot_command(robots(1).ip, 'S');
+    send_robot_command(robots(2).ip, 'S');
+    natnetclient.disconnect;
+    rethrow(e);
+end
 
 % =======================================================================
 % 3. MAIN CONTROL LOOP
@@ -140,114 +560,180 @@ try
             continue;
         end
 
-        % --- Find and validate robot data ---
-        rb_idx_1 = arrayfun(@(rb) rb.ID == robot_ids(1), frame.RigidBodies);
-        rb_idx_2 = arrayfun(@(rb) rb.ID == robot_ids(2), frame.RigidBodies);
+        % --- Find and validate data for both robots ---
+        rb_data = cell(1, 2);
+        found_robots = 0;
+        for i = 1:2
+            if frame.RigidBodies(i).ID == robots(1).id
+                rb_data{1} = frame.RigidBodies(i);
+                found_robots = found_robots + 1;
+            elseif frame.RigidBodies(i).ID == robots(2).id
+                rb_data{2} = frame.RigidBodies(i);
+                found_robots = found_robots + 1;
+            end
+        end
 
-        if ~any(rb_idx_1) || ~any(rb_idx_2)
+        if found_robots < 2
             disp('Waiting for both robots to be tracked...');
             pause(0.1);
             continue;
         end
-        
-        rb1 = frame.RigidBodies(rb_idx_1);
-        rb2 = frame.RigidBodies(rb_idx_2);
 
-        % --- Data Acquisition for Both Robots ---
-        pos_opti_1 = [rb1.x, rb1.y, rb1.z] * 1000;
-        pos_opti_2 = [rb2.x, rb2.y, rb2.z] * 1000;
+        % --- Update kinematics for both robots ---
+        for i = 1:2
+            pos_opti = [rb_data{i}.x, rb_data{i}.y, rb_data{i}.z] * 1000;
+            q = quaternion(rb_data{i}.qw, rb_data{i}.qx, rb_data{i}.qy, rb_data{i}.qz);
+            angles = q.EulerAngles('ZYX');
+            robots(i).pos = [pos_opti(3) + z_offset; pos_opti(1) + x_offset];
+            robots(i).angle = wrapToPi(deg2rad(rad2deg(angles(2)) + 230));
+        end
 
-        q1 = quaternion(rb1.qw, rb1.qx, rb1.qy, rb1.qz);
-        angles1 = q1.EulerAngles('YZX');
-        current_angle_1 = wrapToPi(deg2rad(rad2deg(angles1(1)) + 230));
-
-        q2 = quaternion(rb2.qw, rb2.qx, rb2.qy, rb2.qz);
-        angles2 = q2.EulerAngles('YZX');
-        current_angle_2 = wrapToPi(deg2rad(rad2deg(angles2(1)) + 230));
-
-        % --- Coordinate Transformation ---
-        pos_sim_1 = [pos_opti_1(3) + z_offset; pos_opti_1(1) + x_offset];
-        pos_sim_2 = [pos_opti_2(3) + z_offset; pos_opti_2(1) + x_offset];
-
-        positions_sim = [pos_sim_1, pos_sim_2];
-        current_angles_rad = [current_angle_1, current_angle_2];
-
-        % --- Check for Goal Reached ---
-        dist_to_goal_1 = norm(pos_sim_1 - goal1_sim);
-        dist_to_goal_2 = norm(pos_sim_2 - goal2_sim);
-
-        if dist_to_goal_1 < distance_tolerance && dist_to_goal_2 < distance_tolerance
-            disp('Both robots reached their goals!');
-            send_robot_command(robot_ips{1}, 'S');
-            send_robot_command(robot_ips{2}, 'S');
+        % --- Check for Goal Reached for BOTH robots ---
+        dist1 = norm(robots(1).pos - robots(1).waypoints(end, :)');
+        dist2 = norm(robots(2).pos - robots(2).waypoints(end, :)');
+        if dist1 < control_params.distance_tolerance && dist2 < control_params.distance_tolerance
+            disp('Both robots reached their final goals!');
+            send_robot_command(robots(1).ip, 'S');
+            send_robot_command(robots(2).ip, 'S');
             break;
         end
 
-        % --- Loop through each robot to calculate and send commands ---
+        % --- Main logic loop for each robot ---
         for i = 1:2
-            current_pos = positions_sim(:, i);
-            current_angle = current_angles_rad(i);
-            goal_pos = goals_sim(:, i);
-            other_robot_pos = positions_sim(:, 3-i); % If i=1, other robot is 2. If i=2, other robot is 1.
+            robot = robots(i);
+            other_robot = robots(3-i);
 
-            % --- APF Calculation ---
-            [~, ~, F_combined] = calculate_apf_forces(current_pos, goal_pos, ...
-                other_robot_pos, detection_radius, attraction_factor, repulsion_factor);
-
-            % --- Dynamic Waypoint Generation ---
-            if norm(F_combined) > 0.01
-                desired_heading = atan2(F_combined(2), F_combined(1));
-            else
-                goal_direction = goal_pos - current_pos;
-                desired_heading = atan2(goal_direction(2), goal_direction(1));
+            if robot.current_waypoint_index > size(robot.waypoints, 1)
+                send_robot_command(robot.ip, 'S');
+                continue;
             end
-            temp_waypoint = current_pos + dynamic_waypoint_distance * [cos(desired_heading); sin(desired_heading)];
+            current_target_pos = robot.waypoints(robot.current_waypoint_index, :)';
+            distance_error = norm(robot.pos - current_target_pos);
 
-            % --- PID Control to reach temporary waypoint ---
-            error_vec = temp_waypoint - current_pos;
-            target_angle = atan2(error_vec(2), error_vec(1));
-            heading_error = wrapToPi(target_angle - current_angle);
+            if distance_error < control_params.distance_tolerance
+                if robot.current_waypoint_index == size(robot.waypoints, 1)
+                    disp(['Robot ', num2str(robot.id), ' reached FINAL target!']);
+                    robot.current_waypoint_index = robot.current_waypoint_index + 1;
+                    send_robot_command(robot.ip, 'S');
+                    robots(i) = robot;
+                    continue;
+                elseif robot.current_waypoint_index == 1 && ~robot.first_waypoint_reached
+                    disp(['Robot ', num2str(robot.id), ' reached first waypoint. Preparing for alignment...']);
+                    robot.first_waypoint_reached = true;
+                    robot.state = 'ALIGNMENT_PREP';
+                    robot.alignment_pause_timer = tic;
+                    robot.integral_h = 0; robot.prev_error_h = 0;
+                    robot.integral_d = 0; robot.prev_error_d = 0;
+                else
+                    disp(['Robot ', num2str(robot.id), ' reached waypoint ', num2str(robot.current_waypoint_index), '.']);
+                    robot.current_waypoint_index = robot.current_waypoint_index + 1;
+                    if strcmp(robot.state, 'ALIGNING')
+                        robot.state = 'NORMAL_OPERATION';
+                    end
+                end
+            end
             
-            integral_h(i) = integral_h(i) + rad2deg(heading_error) * dt;
-            derivative_h = (rad2deg(heading_error) - prev_error_h(i)) / dt;
-            turn_component = Kp_h * rad2deg(heading_error) + Ki_h * integral_h(i) + Kd_h * derivative_h;
-            prev_error_h(i) = rad2deg(heading_error);
-            
-            turn_component = min(max(turn_component, -max_turn_component), max_turn_component);
+            F_att = current_target_pos - robot.pos;
+            F_rep_robot = [0; 0];
+            obstacle_vector = robot.pos - other_robot.pos;
+            dist_to_obstacle = norm(obstacle_vector);
+            if dist_to_obstacle <= rt_config.detection_radius_robot && dist_to_obstacle > 1e-6
+                F_rep_robot = (obstacle_vector / dist_to_obstacle) * ...
+                       (rt_config.detection_radius_robot - dist_to_obstacle) / dist_to_obstacle;
+                F_rep_robot = rt_config.repulsion_factor_robot * F_rep_robot;
+            end
 
-            % --- Motor Command Generation ---
-            if norm(goal_pos - current_pos) < distance_tolerance
-                left_speed = 0; right_speed = 0;
+            F_rep_wall = [0; 0];
+            if robot.pos(1) < sim_x_min + rt_config.detection_radius_wall, F_rep_wall(1) = F_rep_wall(1) + rt_config.repulsion_factor_wall * (1 - (robot.pos(1) - sim_x_min)/rt_config.detection_radius_wall); end
+            if robot.pos(1) > sim_x_max - rt_config.detection_radius_wall, F_rep_wall(1) = F_rep_wall(1) - rt_config.repulsion_factor_wall * (1 - (sim_x_max - robot.pos(1))/rt_config.detection_radius_wall); end
+            if robot.pos(2) < sim_y_min + rt_config.detection_radius_wall, F_rep_wall(2) = F_rep_wall(2) + rt_config.repulsion_factor_wall * (1 - (robot.pos(2) - sim_y_min)/rt_config.detection_radius_wall); end
+            if robot.pos(2) > sim_y_max - rt_config.detection_radius_wall, F_rep_wall(2) = F_rep_wall(2) - rt_config.repulsion_factor_wall * (1 - (sim_y_max - robot.pos(2))/rt_config.detection_radius_wall); end
+
+            F_combined = F_att + F_rep_robot + F_rep_wall;
+            
+            if strcmp(robot.state, 'ALIGNMENT_PREP') || strcmp(robot.state, 'ALIGNING')
+                if robot.current_waypoint_index + 1 <= size(robot.waypoints, 1)
+                    next_target_pos = robot.waypoints(robot.current_waypoint_index + 1, :)';
+                    F_att_align = next_target_pos - robot.pos;
+                    F_combined = F_att_align + F_rep_robot + F_rep_wall;
+                end
+            end
+            target_angle = atan2(F_combined(2), F_combined(1));
+            heading_error = wrapToPi(target_angle - robot.angle);
+            heading_error_deg = rad2deg(heading_error);
+
+            forward_speed = 0; turn_speed = 0;
+            
+            switch robot.state
+                case 'INITIAL_APPROACH'
+                    robot.integral_d = robot.integral_d + distance_error * dt;
+                    derivative_d = (distance_error - robot.prev_error_d) / dt;
+                    forward_speed = pid_gains.Kp_d * distance_error + pid_gains.Ki_d * robot.integral_d + pid_gains.Kd_d * derivative_d;
+                    robot.prev_error_d = distance_error;
+                    forward_speed = min(max(forward_speed, 0), control_params.max_forward_speed);
+                    
+                    robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                    derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                    turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                    robot.prev_error_h = heading_error_deg;
+                    
+                case 'ALIGNMENT_PREP'
+                    if toc(robot.alignment_pause_timer) >= 1
+                        robot.state = 'ALIGNING';
+                        robot.current_waypoint_index = robot.current_waypoint_index + 1;
+                        robot.integral_h = 0; robot.prev_error_h = 0;
+                    end
+                    
+                case 'ALIGNING'
+                    if abs(heading_error_deg) < control_params.alignment_heading_tolerance
+                        robot.state = 'NORMAL_OPERATION';
+                        robot.integral_h = 0; robot.prev_error_h = 0;
+                    else
+                        robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                        derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                        turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                        robot.prev_error_h = heading_error_deg;
+                    end
+                    
+                case 'NORMAL_OPERATION'
+                    forward_speed = control_params.constant_forward_speed;
+                    robot.integral_h = robot.integral_h + heading_error_deg * dt;
+                    derivative_h = (heading_error_deg - robot.prev_error_h) / dt;
+                    turn_speed = pid_gains.Kp_h * heading_error_deg + pid_gains.Ki_h * robot.integral_h + pid_gains.Kd_h * derivative_h;
+                    robot.prev_error_h = heading_error_deg;
+            end
+
+            turn_speed = min(max(turn_speed, -control_params.max_turn_speed), control_params.max_turn_speed);
+            
+            if strcmp(robot.state, 'ALIGNING')
+                left_speed = round(turn_speed);
+                right_speed = round(-turn_speed);
             else
-                left_speed = round(base_forward_speed + turn_component);
-                right_speed = round(base_forward_speed - turn_component);
+                left_speed = round(forward_speed + turn_speed);
+                right_speed = round(forward_speed - turn_speed);
             end
 
             left_speed  = round(min(max(left_speed, -255), 255));
             right_speed = round(min(max(right_speed, -255), 255));
 
             json_command = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"pid"}', left_speed, right_speed);
-            send_robot_command(robot_ips{i}, json_command);
+            send_robot_command(robot.ip, json_command);
 
-            % --- Store data for plotting ---
-            if i == 1
-                trajectory_points_1(:, end+1) = current_pos;
-                set(h_robot1, 'XData', current_pos(1), 'YData', current_pos(2));
-                set(h_traj1, 'XData', trajectory_points_1(1,:), 'YData', trajectory_points_1(2,:));
-                set(h_temp_wp1, 'XData', temp_waypoint(1), 'YData', temp_waypoint(2));
-            else
-                trajectory_points_2(:, end+1) = current_pos;
-                set(h_robot2, 'XData', current_pos(1), 'YData', current_pos(2));
-                set(h_traj2, 'XData', trajectory_points_2(1,:), 'YData', trajectory_points_2(2,:));
-                set(h_temp_wp2, 'XData', temp_waypoint(1), 'YData', temp_waypoint(2));
-            end
+            robots(i) = robot;
+
+            set(robots(i).h_robot, 'XData', robot.pos(1), 'YData', robot.pos(2));
+            orientation_length = 250;
+            orient_end = robot.pos + orientation_length * [cos(robot.angle); sin(robot.angle)];
+            set(robots(i).h_orient, 'XData', [robot.pos(1), orient_end(1)], 'YData', [robot.pos(2), orient_end(2)]);
+            robots(i).trajectory(:, end+1) = robot.pos;
+            set(robots(i).h_traj, 'XData', robots(i).trajectory(1,:), 'YData', robots(i).trajectory(2,:));
         end
         drawnow limitrate;
     end
 catch e
     disp('An error occurred. Stopping robots and disconnecting.');
-    send_robot_command(robot_ips{1}, 'S');
-    send_robot_command(robot_ips{2}, 'S');
+    send_robot_command(robots(1).ip, 'S');
+    send_robot_command(robots(2).ip, 'S');
     natnetclient.disconnect;
     rethrow(e);
 end
@@ -256,13 +742,11 @@ end
 % 4. CLEANUP
 % =======================================================================
 disp('Disconnecting NatNet client...');
-send_robot_command(robot_ips{1}, 'S');
-send_robot_command(robot_ips{2}, 'S');
+send_robot_command(robots(1).ip, 'S');
+send_robot_command(robots(2).ip, 'S');
 natnetclient.disconnect;
 clear natnetclient;
 disp('Script finished.');
-
-end
 
 % =======================================================================
 % 5. HELPER FUNCTIONS
@@ -270,28 +754,18 @@ end
 
 function response = send_robot_command(ip, command)
     try
-        t = tcpclient(ip, 80, 'ConnectTimeout', 0.5, 'Timeout', 1);
-        data_to_send = [char(command), newline];
-        write(t, data_to_send);
-        
-        % Optional: Wait for acknowledgment if your robot sends one
-        % pause(0.01);  % Small delay to ensure data is sent
-        
-        response = 'OK';
+        t = tcpclient(ip, 80, 'ConnectTimeout', 1, 'Timeout', 1);
+        write(t, [char(command), newline]);
         clear t;
+        response = 'OK';
     catch e
-        response = ['Error sending to ', char(ip), ': ', e.message];
-        fprintf('WARNING: Failed to send command to robot at %s\n', char(ip));
-        fprintf('  Command: %s\n', char(command));
-        fprintf('  Error: %s\n', e.message);
+        fprintf('WARNING: Failed to send command to robot at %s. Error: %s', char(ip), e.message);
+        response = 'Error';
     end
 end
 
 function q = quaternion(w, x, y, z)
-    q.w = w;
-    q.x = x;
-    q.y = y;
-    q.z = z;
+    q.w = w; q.x = x; q.y = y; q.z = z;
     q.EulerAngles = @(order) quat2eul([q.w, q.x, q.y, q.z], order);
 end
 
@@ -299,99 +773,94 @@ function angle = wrapToPi(angle)
     angle = atan2(sin(angle), cos(angle));
 end
 
-function [F_att, F_rep, F_combined] = calculate_apf_forces(current_pos, goal, other_robot_pos, ...
-    detection_radius, attraction_factor, repulsion_factor)
-    
-    % Calculate attractive force towards goal
-    goal_vector = goal - current_pos;
-    goal_dist = norm(goal_vector);
-    if goal_dist > 1e-6  % Avoid division by zero
-        F_att = attraction_factor * (goal_vector / goal_dist);
-    else
-        F_att = [0; 0];
-    end
-    
-    % Calculate repulsive force from other robot
-    F_rep = [0; 0];
-    if ~isempty(other_robot_pos)
-        obstacle_vector = current_pos - other_robot_pos;
-        dist_to_obstacle = norm(obstacle_vector);
-        
-        if dist_to_obstacle <= detection_radius && dist_to_obstacle > 1e-6  % Avoid division by zero
-            % Normalize the repulsion vector and scale by distance
-            F_rep = (obstacle_vector / dist_to_obstacle) * ...
-                   (detection_radius - dist_to_obstacle) / dist_to_obstacle;
-            F_rep = repulsion_factor * F_rep;
-        end
-    end
-    
-    % Combine forces
-    F_combined = F_att + F_rep;
-    
-    % Normalize combined force
-    combined_norm = norm(F_combined);
-    if combined_norm > 1e-6  % Avoid division by zero
-        F_combined = F_combined / combined_norm;
-    end
-end
+function [trajectory1, trajectory2] = generate_apf_trajectories(start1, goal1, start2, goal2, config)
+    disp('Generating trajectories...');
+    trajectory1 = start1;
+    trajectory2 = start2;
+    current_pos_1 = start1;
+    current_pos_2 = start2;
+    goal1_reached = false;
+    goal2_reached = false;
 
-function [start, goal] = generate_random_path(x_bound, y_bound, min_path_length)
-    max_attempts = 20;
-    for attempt = 1:max_attempts
-        start = [(rand()*2-1)*x_bound; (rand()*2-1)*y_bound];
-        angle = rand() * 2 * pi;
-        path_length = min_path_length + rand() * (min_path_length/2);
-        goal = start + path_length * [cos(angle); sin(angle)];
-        
-        goal(1) = max(-x_bound, min(x_bound, goal(1)));
-        goal(2) = max(-y_bound, min(y_bound, goal(2)));
-        
-        if norm(goal - start) >= min_path_length
-            return;
-        end
-    end
-    error('Failed to generate a valid random path.');
-end
+    for step = 1:config.max_steps
+        if goal1_reached && goal2_reached, break; end
 
-function [newStart, newGoal, interceptPoint] = generateInterceptingPathSimple(refStart, refGoal, ...
-    x_bound, y_bound, min_path_length, safeRadius)
-    
-    max_attempts = 100;
-    for attempt = 1:max_attempts
-        dir = refGoal - refStart;
-        t = 0.4 + rand() * 0.2;
-        interceptPoint = refStart + t * dir;
-        
-        if all(abs(interceptPoint) <= [x_bound; y_bound])
-            radius = norm(interceptPoint - refStart);
-            newStart = generateRandomPointOnCircleBounded(interceptPoint, radius, x_bound, y_bound);
+        % Robot 1 Calculation
+        if ~goal1_reached
+            F_att_1 = (goal1 - current_pos_1) * config.attraction_factor;
             
-            if norm(newStart - refStart) > safeRadius
-                dir_to_goal = interceptPoint - newStart;
-                newGoal = interceptPoint + dir_to_goal;
-                newGoal(1) = max(-x_bound, min(x_bound, newGoal(1)));
-                newGoal(2) = max(-y_bound, min(y_bound, newGoal(2)));
-                
-                if norm(newGoal - newStart) >= min_path_length
-                    return;
-                end
+            robot_vector_1 = current_pos_1 - current_pos_2;
+            dist_1 = norm(robot_vector_1);
+            F_rep_robot_1 = [0, 0];
+            if dist_1 < config.detection_radius_robot && dist_1 > 1e-6
+                % Using a more effective repulsion formula
+                force_magnitude = config.repulsion_factor_robot * (config.detection_radius_robot - dist_1) / dist_1;
+                F_rep_robot_1 = (robot_vector_1 / dist_1) * force_magnitude;
             end
+
+            F_rep_wall_1 = calculate_wall_repulsion(current_pos_1, config.sim_bounds, config.detection_radius_wall, config.repulsion_factor_wall);
+            F_total_1 = F_att_1 + F_rep_robot_1 + F_rep_wall_1;
+            current_pos_1 = current_pos_1 + (F_total_1 / norm(F_total_1)) * config.step_size;
+            trajectory1 = [trajectory1; current_pos_1];
+            if norm(current_pos_1 - goal1) < config.goal_tolerance, goal1_reached = true; disp('Robot 1 trajectory complete.'); end
+        end
+
+        % Robot 2 Calculation
+        if ~goal2_reached
+            F_att_2 = (goal2 - current_pos_2) * config.attraction_factor;
+
+            robot_vector_2 = current_pos_2 - current_pos_1;
+            dist_2 = norm(robot_vector_2);
+            F_rep_robot_2 = [0, 0];
+            if dist_2 < config.detection_radius_robot && dist_2 > 1e-6
+                % Using a more effective repulsion formula
+                force_magnitude = config.repulsion_factor_robot * (config.detection_radius_robot - dist_2) / dist_2;
+                F_rep_robot_2 = (robot_vector_2 / dist_2) * force_magnitude;
+            end
+
+            F_rep_wall_2 = calculate_wall_repulsion(current_pos_2, config.sim_bounds, config.detection_radius_wall, config.repulsion_factor_wall);
+            F_total_2 = F_att_2 + F_rep_robot_2 + F_rep_wall_2;
+            current_pos_2 = current_pos_2 + (F_total_2 / norm(F_total_2)) * config.step_size;
+            trajectory2 = [trajectory2; current_pos_2];
+            if norm(current_pos_2 - goal2) < config.goal_tolerance, goal2_reached = true; disp('Robot 2 trajectory complete.'); end
         end
     end
+    if step == config.max_steps, disp('Max steps reached in generation.'); end
     
-    % Fallback if no intercepting path is found
-    [newStart, newGoal] = generate_random_path(x_bound, y_bound, min_path_length);
-    interceptPoint = (newStart + newGoal) / 2;
+    % Plot generated trajectories for verification
+    figure; hold on; grid on; axis equal;
+    title('Generated APF Trajectories');
+    xlabel('Simulator X (mm)'); ylabel('Simulator Y (mm)');
+    rectangle('Position', [config.sim_bounds(1), config.sim_bounds(3), config.sim_bounds(2)-config.sim_bounds(1), config.sim_bounds(4)-config.sim_bounds(3)], 'EdgeColor', 'k', 'LineStyle', '--');
+    plot(trajectory1(:,1), trajectory1(:,2), 'g-', 'LineWidth', 2);
+    plot(trajectory2(:,1), trajectory2(:,2), 'b-', 'LineWidth', 2);
+    plot(start1(1), start1(2), 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g');
+    plot(goal1(1), goal1(2), 'gp', 'MarkerSize', 15, 'MarkerFaceColor', 'g');
+    plot(start2(1), start2(2), 'bo', 'MarkerSize', 10, 'MarkerFaceColor', 'b');
+    plot(goal2(1), goal2(2), 'bp', 'MarkerSize', 15, 'MarkerFaceColor', 'b');
+    legend('Robot 1 Trajectory', 'Robot 2 Trajectory', 'R1 Start', 'R1 Goal', 'R2 Start', 'R2 Goal');
+    hold off;
+    disp('Trajectory generation plot displayed. Press any key to continue to robot control...');
+    pause;
 end
 
-function point = generateRandomPointOnCircleBounded(center, radius, x_bound, y_bound)
-    for attempt = 1:50
-        theta = 2 * pi * rand();
-        point = center + radius * [cos(theta); sin(theta)];
-        if all(abs(point) <= [x_bound; y_bound])
-            return;
-        end
+function F_rep_wall = calculate_wall_repulsion(pos, bounds, radius, factor)
+    F_rep_wall = [0, 0];
+    x_min = bounds(1); x_max = bounds(2); y_min = bounds(3); y_max = bounds(4);
+    % Towards right from left wall
+    dist_left = pos(1) - x_min;
+    if dist_left < radius, F_rep_wall(1) = F_rep_wall(1) + factor * (1/dist_left - 1/radius) / dist_left^2;
     end
-    % Fallback
-    point = center;
+    % Towards left from right wall
+    dist_right = x_max - pos(1);
+    if dist_right < radius, F_rep_wall(1) = F_rep_wall(1) - factor * (1/dist_right - 1/radius) / dist_right^2;
+    end
+    % Towards up from bottom wall
+    dist_bottom = pos(2) - y_min;
+    if dist_bottom < radius, F_rep_wall(2) = F_rep_wall(2) + factor * (1/dist_bottom - 1/radius) / dist_bottom^2;
+    end
+    % Towards down from top wall
+    dist_top = y_max - pos(2);
+    if dist_top < radius, F_rep_wall(2) = F_rep_wall(2) - factor * (1/dist_top - 1/radius) / dist_top^2;
+    end
 end
