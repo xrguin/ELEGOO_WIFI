@@ -15,7 +15,8 @@ clc; close all;
 % 0. SETUP - Load NatNet .NET Assembly
 % =======================================================================
 try
-    NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
+    % NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
+    NET.addAssembly('D:\MATLAB_Local\NatNetSDK\lib\x64\NatNetML.dll');
 catch e
     error(['Failed to load NatNetML.dll. Please ensure the path is correct ' ...
            'and the .NET Framework is installed. Original error: %s'], e.message);
@@ -47,7 +48,7 @@ robot2_rigid_body_id = robot_configs(robot2_id).rigid_body_id;
 fprintf('Controlling Robot 1 (ID: %d) and Robot 2 (ID: %d)\n', robot1_rigid_body_id, robot2_rigid_body_id);
 
 % -- NatNet Server Configuration
-natnet_client_ip = '192.168.1.203';
+natnet_client_ip = '192.168.1.70';
 natnet_server_ip = '192.168.1.209';
 
 % -- Start and Goal Positions (Swapped for each robot)
@@ -63,20 +64,26 @@ fprintf('Robot 1: Start [%.1f, %.1f, %.1f], Goal [%.1f, %.1f, %.1f]\n', robot1_s
 fprintf('Robot 2: Start [%.1f, %.1f, %.1f], Goal [%.1f, %.1f, %.1f]\n', robot2_start_pos, robot2_goal_pos);
 
 % -- Velocity Profile Parameters
-desired_motor_speed = 80;
+desired_motor_speed = 50;
 
 % -- APF Parameters (same for both robots)
 attraction_factor = 1.2;
-repulsion_factor = 2; 
-detection_radius_mm = 800;
+repulsion_factor = 1.2; 
+detection_radius_mm = 2000;
 
 % -- PID Controller Gains for Angular Control (same for both robots)
 Kp_w = 0.8;
 Ki_w = 0.2;
 Kd_w = 0.15;
 
+% -- PID Controller Gains for Velocity Control (Initial Approach Only)
+Kp_d = 0.25;  % Distance Proportional Gain
+Ki_d = 0.01;  % Distance Integral Gain
+Kd_d = 0.1;   % Distance Derivative Gain
+max_initial_speed = 80;  % Maximum speed during initial approach (0-255)
+
 % -- Control Parameters
-distance_tolerance = 80; % Goal reached tolerance (mm)
+distance_tolerance = 200; % Goal reached tolerance (mm)
 alignment_heading_tolerance = 20; % Alignment phase tolerance (degrees)
 
 % =======================================================================
@@ -112,16 +119,30 @@ zlim(ax_world, [min(boundary_pts(:,3)) - padding, max(boundary_pts(:,3)) + paddi
 set(ax_world, 'ZDir', 'reverse');
 
 % -- World Plot Handles
-plot3(ax_world, robot1_start_pos(1), robot1_start_pos(2), robot1_start_pos(3), 'go', 'MarkerSize', 12, 'MarkerFaceColor', 'c');
+plot3(ax_world, robot1_start_pos(1), robot1_start_pos(2), robot1_start_pos(3), 'co', 'MarkerSize', 12, 'MarkerFaceColor', 'c', 'DisplayName', 'R1 Start');
 plot3(ax_world, robot1_goal_pos(1), robot1_goal_pos(2), robot1_goal_pos(3), 'b*', 'MarkerSize', 15, 'LineWidth', 2, 'DisplayName', 'R1 Goal');
 h_robot1 = plot3(ax_world, 0, 0, 0, 'bo', 'MarkerSize', 10, 'MarkerFaceColor', 'b', 'DisplayName', 'Robot 1');
-h_robot1_orientation = line(ax_world, [0 0], [0 0], [0 0], 'Color', 'b', 'LineWidth', 2);
+h_robot1_orientation = line(ax_world, [0 0], [0 0], [0 0], 'Color', 'b', 'LineWidth', 2, 'HandleVisibility', 'off');
 h_trajectory1 = plot3(ax_world, 0, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'R1 Trajectory');
-plot3(ax_world, robot2_start_pos(1), robot2_start_pos(2), robot2_start_pos(3), 'go', 'MarkerSize', 12, 'MarkerFaceColor', 'c');
+
+% Robot 1 detection range circle (transparent light blue)
+theta = linspace(0, 2*pi, 50);
+detection_circle_x = detection_radius_mm * cos(theta);
+detection_circle_z = detection_radius_mm * sin(theta);
+detection_circle_y = zeros(size(theta));
+h_detection1 = patch(ax_world, detection_circle_x, detection_circle_y, detection_circle_z, 'b', ...
+    'FaceAlpha', 0.1, 'EdgeColor', 'b', 'EdgeAlpha', 0.3, 'LineWidth', 1, 'DisplayName', 'R1 Detection Range');
+
+plot3(ax_world, robot2_start_pos(1), robot2_start_pos(2), robot2_start_pos(3), 'mo', 'MarkerSize', 12, 'MarkerFaceColor', 'm', 'DisplayName', 'R2 Start');
 plot3(ax_world, robot2_goal_pos(1), robot2_goal_pos(2), robot2_goal_pos(3), 'g*', 'MarkerSize', 15, 'LineWidth', 2, 'DisplayName', 'R2 Goal');
 h_robot2 = plot3(ax_world, 0, 0, 0, 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g', 'DisplayName', 'Robot 2');
-h_robot2_orientation = line(ax_world, [0 0], [0 0], [0 0], 'Color', 'g', 'LineWidth', 2);
+h_robot2_orientation = line(ax_world, [0 0], [0 0], [0 0], 'Color', 'g', 'LineWidth', 2, 'HandleVisibility', 'off');
 h_trajectory2 = plot3(ax_world, 0, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'R2 Trajectory');
+
+% Robot 2 detection range circle (transparent light green)
+h_detection2 = patch(ax_world, detection_circle_x, detection_circle_y, detection_circle_z, 'g', ...
+    'FaceAlpha', 0.1, 'EdgeColor', 'g', 'EdgeAlpha', 0.3, 'LineWidth', 1, 'DisplayName', 'R2 Detection Range');
+
 legend(ax_world, 'Location', 'best');
 
 % -- Initialize Robot 1 Perspective Plot
@@ -146,28 +167,40 @@ xlabel(ax_heading, 'Time (s)'); ylabel(ax_heading, 'Heading (degrees)');
 ylim(ax_heading, [-180, 180]);
 h_apf_heading = plot(ax_heading, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
 h_current_heading = plot(ax_heading, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
-h_heading_point = plot(ax_heading, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'DisplayName', 'Current');
+h_heading_point = plot(ax_heading, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
 legend(ax_heading, 'Location', 'best');
 
-figure('Position', [900, 50, 600, 350]);
-ax_heading = gca;
-hold(ax_heading, 'on'); grid on;
-title(ax_heading, 'Robot 2 APF Heading Control');
-xlabel(ax_heading, 'Time (s)'); ylabel(ax_heading, 'Heading (degrees)');
-ylim(ax_heading, [-180, 180]);
-h_apf_heading = plot(ax_heading, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
-h_current_heading = plot(ax_heading, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
-h_heading_point = plot(ax_heading, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'DisplayName', 'Current');
-legend(ax_heading, 'Location', 'best');
+figure('Position', [900, 450, 600, 350]);
+ax_heading2 = gca;
+hold(ax_heading2, 'on'); grid on;
+title(ax_heading2, 'Robot 2 APF Heading Control');
+xlabel(ax_heading2, 'Time (s)'); ylabel(ax_heading2, 'Heading (degrees)');
+ylim(ax_heading2, [-180, 180]);
+h_apf_heading2 = plot(ax_heading2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
+h_current_heading2 = plot(ax_heading2, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
+h_heading_point2 = plot(ax_heading2, 0, 0, 'go', 'MarkerSize', 8, 'MarkerFaceColor', 'g', 'HandleVisibility', 'off');
+legend(ax_heading2, 'Location', 'best');
+
+figure
+ax_heading_error = gca;
+hold(ax_heading_error, 'on'); grid on;
+title(ax_heading_error, 'Robot 1 Heading Error');
+xlabel(ax_heading_error, 'Time (s)'); ylabel(ax_heading_error, 'Heading Error (degrees)');
+ylim(ax_heading_error, [-180, 180]);
+h_current_heading_error = plot(ax_heading_error, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Heading Error');
+h_heading_error_point = plot(ax_heading_error, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
+legend(ax_heading_error, 'Location', 'best');
 
 % -- Initialize State Variables
 % Robot 1
 r1_state = 'INITIAL_APPROACH'; r1_integral_w = 0; r1_prev_error_w = 0; r1_traj_pts = []; r1_last_valid_pos = [0,0,0]; r1_goal_reached = false; r1_alignment_timer = 0;
-r1_apf_start_time = []; r1_heading_time_data = []; r1_heading_angle_data = []; r1_apf_heading_data = [];
+r1_apf_start_time = []; r1_heading_time_data = []; r1_heading_angle_data = []; r1_apf_heading_data = []; r1_heading_error_data = [];
+r1_integral_d = 0; r1_prev_error_d = 0;  % Velocity PID states for initial approach
 
 % Robot 2
 r2_state = 'INITIAL_APPROACH'; r2_integral_w = 0; r2_prev_error_w = 0; r2_traj_pts = []; r2_last_valid_pos = [0,0,0]; r2_goal_reached = false; r2_alignment_timer = 0;
 r2_apf_start_time = []; r2_heading_time_data = []; r2_heading_angle_data = []; r2_apf_heading_data = [];
+r2_integral_d = 0; r2_prev_error_d = 0;  % Velocity PID states for initial approach
 
 last_loop_time = tic;
 disp('Initialization complete. Starting dual robot avoidance...');
@@ -206,14 +239,22 @@ try
         if r1_goal_reached && r2_goal_reached, disp('Both robots reached goals!'); send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S'); break; end
 
         % -- ROBOT 1 CONTROL
-        [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head] = ...
-            robot_control_logic(dt, r1_state, r1_pos, r1_angle, robot1_start_pos, robot1_goal_pos, r2_pos, r1_integral_w, r1_prev_error_w, r1_goal_reached, r1_alignment_timer, Kp_w, Ki_w, Kd_w, attraction_factor, repulsion_factor, detection_radius_mm, distance_tolerance, alignment_heading_tolerance, desired_motor_speed, 1);
+        [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head, r1_heading_err, r1_id, r1_ped] = ...
+            robot_control_logic(dt, r1_state, r1_pos, r1_angle, robot1_start_pos, robot1_goal_pos, r2_pos, ...
+                r1_integral_w, r1_prev_error_w, r1_integral_d, r1_prev_error_d, r1_goal_reached, r1_alignment_timer, ...
+                Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
+                distance_tolerance, alignment_heading_tolerance, desired_motor_speed, max_initial_speed, 1);
         r1_integral_w = r1_iw; r1_prev_error_w = r1_pew; r1_goal_reached = r1_gr; r1_alignment_timer = r1_at;
+        r1_integral_d = r1_id; r1_prev_error_d = r1_ped;
 
         % -- ROBOT 2 CONTROL
-        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head] = ... % No need for R2 heading plot
-            robot_control_logic(dt, r2_state, r2_pos, r2_angle, robot2_start_pos, robot2_goal_pos, r1_pos, r2_integral_w, r2_prev_error_w, r2_goal_reached, r2_alignment_timer, Kp_w, Ki_w, Kd_w, attraction_factor, repulsion_factor, detection_radius_mm, distance_tolerance, alignment_heading_tolerance, desired_motor_speed, 2);
+        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, r2_heading_err, r2_id, r2_ped] = ...
+            robot_control_logic(dt, r2_state, r2_pos, r2_angle, robot2_start_pos, robot2_goal_pos, r1_pos, ...
+                r2_integral_w, r2_prev_error_w, r2_integral_d, r2_prev_error_d, r2_goal_reached, r2_alignment_timer, ...
+                Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
+                distance_tolerance, alignment_heading_tolerance, desired_motor_speed, max_initial_speed, 2);
         r2_integral_w = r2_iw; r2_prev_error_w = r2_pew; r2_goal_reached = r2_gr; r2_alignment_timer = r2_at;
+        r2_integral_d = r2_id; r2_prev_error_d = r2_ped;
 
         % -- SYNCHRONIZATION
         if strcmp(r1_state, 'WAITING_FOR_PARTNER') && strcmp(r2_state, 'WAITING_FOR_PARTNER'), disp('Both aligned. Starting APF.'); r1_state = 'APF_CONTROL'; r2_state = 'APF_CONTROL'; end
@@ -241,17 +282,13 @@ try
         r2_traj_pts(:, end+1) = r2_pos;
         set(h_trajectory2, 'XData', r2_traj_pts(1,:), 'YData', r2_traj_pts(2,:), 'ZData', r2_traj_pts(3,:));
         
-        % -- Robot 1 Perspective View
-        % angle_rad = -deg2rad(r1_angle); % Negative angle for inverse rotation
-        % rot_matrix = [cos(angle_rad), -sin(angle_rad); sin(angle_rad), cos(angle_rad)];
-        % obstacle_vec_2d = (r2_pos([1,3]) - r1_pos([1,3]))';
-        % obstacle_relative = rot_matrix * obstacle_vec_2d;
-        % set(h_vision_obstacle, 'XData', obstacle_relative(1), 'YData', obstacle_relative(2));
-        % goal_vec_2d = (robot1_goal_pos([1,3]) - r1_pos([1,3]))';
-        % goal_relative = rot_matrix * goal_vec_2d;
-        % set(h_vision_goal, 'XData', goal_relative(1), 'YData', goal_relative(2));
-        % if ~isempty(r1_traj_pts), traj_vec_2d = r1_traj_pts([1,3],:) - r1_pos([1,3])'; traj_relative = rot_matrix * traj_vec_2d; set(h_vision_traj, 'XData', traj_relative(1,:), 'YData', traj_relative(2,:)); end
-        % axis(ax_vision, [-4000 4000 -4000 4000]);
+        % -- Update detection range circles to follow robots
+        set(h_detection1, 'XData', detection_circle_x + r1_pos(1), ...
+                          'YData', detection_circle_y + r1_pos(2), ...
+                          'ZData', detection_circle_z + r1_pos(3));
+        set(h_detection2, 'XData', detection_circle_x + r2_pos(1), ...
+                          'YData', detection_circle_y + r2_pos(2), ...
+                          'ZData', detection_circle_z + r2_pos(3));
 
         % -- Robot 1 Heading Plot
         if strcmp(r1_state, 'APF_CONTROL')
@@ -260,9 +297,13 @@ try
             r1_heading_time_data(end+1) = current_apf_time;
             r1_heading_angle_data(end+1) = r1_angle;
             r1_apf_heading_data(end+1) = r1_apf_head;
+            r1_heading_error_data(end+1) = r1_heading_err;
             set(h_current_heading, 'XData', r1_heading_time_data, 'YData', r1_heading_angle_data);
             set(h_apf_heading, 'XData', r1_heading_time_data, 'YData', r1_apf_heading_data);
             set(h_heading_point, 'XData', current_apf_time, 'YData', r1_angle);
+            % Update heading error plot
+            set(h_current_heading_error, 'XData', r1_heading_time_data, 'YData', r1_heading_error_data);
+            set(h_heading_error_point, 'XData', current_apf_time, 'YData', r1_heading_err);
         end
 
         if strcmp(r2_state, 'APF_CONTROL')
@@ -271,10 +312,14 @@ try
             r2_heading_time_data(end+1) = current_apf_time;
             r2_heading_angle_data(end+1) = r2_angle;
             r2_apf_heading_data(end+1) = r2_apf_head;
-            set(h_current_heading, 'XData', r2_heading_time_data, 'YData', r2_heading_angle_data);
-            set(h_apf_heading, 'XData', r2_heading_time_data, 'YData', r2_apf_heading_data);
-            set(h_heading_point, 'XData', current_apf_time, 'YData', r2_angle);
+            set(h_current_heading2, 'XData', r2_heading_time_data, 'YData', r2_heading_angle_data);
+            set(h_apf_heading2, 'XData', r2_heading_time_data, 'YData', r2_apf_heading_data);
+            set(h_heading_point2, 'XData', current_apf_time, 'YData', r2_angle);
         end
+
+
+
+
 
         drawnow limitrate;
     end
@@ -297,31 +342,48 @@ clear natnetclient;
 % 5. HELPER FUNCTIONS
 % =======================================================================
 
-function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached, alignment_timer, apf_desired_heading] = ...
+function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached, alignment_timer, apf_desired_heading, heading_error, integral_d, prev_error_d] = ...
     robot_control_logic(dt, state, current_pos_3d, current_angle, start_pos, goal_pos, obstacle_pos_3d, ...
-    integral_w, prev_error_w, goal_reached, alignment_timer, ...
-    Kp_w, Ki_w, Kd_w, attraction_factor, repulsion_factor, detection_radius, ...
-    distance_tolerance, alignment_tolerance, desired_speed, robot_num)
+    integral_w, prev_error_w, integral_d, prev_error_d, goal_reached, alignment_timer, ...
+    Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius, ...
+    distance_tolerance, alignment_tolerance, desired_speed, max_initial_speed, robot_num)
     
-    left_speed = 0; right_speed = 0; apf_desired_heading = NaN;
+    left_speed = 0; right_speed = 0; apf_desired_heading = NaN; heading_error = 0;
     if goal_reached, state = 'GOAL_REACHED'; end
 
     dist_to_goal = norm([goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)]);
     if dist_to_goal < distance_tolerance && ~strcmp(state, 'INITIAL_APPROACH'), fprintf('Robot %d: Goal reached!\n', robot_num); goal_reached = true; state = 'GOAL_REACHED'; end
 
     dist_to_start = norm([start_pos(1) - current_pos_3d(1), start_pos(3) - current_pos_3d(3)]);
-    if strcmp(state, 'INITIAL_APPROACH') && dist_to_start < distance_tolerance, fprintf('Robot %d: Start position reached. Preparing for alignment...\n', robot_num); state = 'ALIGNMENT_PREP'; alignment_timer = tic; integral_w = 0; prev_error_w = 0; end
+    if strcmp(state, 'INITIAL_APPROACH') && dist_to_start < distance_tolerance
+        fprintf('Robot %d: Start position reached. Preparing for alignment...\n', robot_num);
+        state = 'ALIGNMENT_PREP';
+        alignment_timer = tic;
+        integral_w = 0;
+        prev_error_w = 0;
+        % Reset velocity PID states when transitioning out of INITIAL_APPROACH
+        integral_d = 0;
+        prev_error_d = 0;
+    end
 
     switch state
         case 'INITIAL_APPROACH'
             target_vec = [start_pos(1) - current_pos_3d(1), start_pos(3) - current_pos_3d(3)];
             target_angle = rad2deg(atan2(target_vec(1), target_vec(2)));
             heading_error = normalize_angle(target_angle - current_angle);
-            fwd_speed = min(0.3 * dist_to_start, 60);
+            
+            % PID control for forward speed based on distance
+            integral_d = integral_d + dist_to_start * dt;
+            if dt > 0, derivative_d = (dist_to_start - prev_error_d) / dt; else, derivative_d = 0; end
+            fwd_speed = Kp_d * dist_to_start + Ki_d * integral_d + Kd_d * derivative_d;
+            prev_error_d = dist_to_start;
+            fwd_speed = min(max(fwd_speed, 0), max_initial_speed);
+            
+            % Heading control
             turn_speed = 1.0 * heading_error;
             left_speed = fwd_speed + turn_speed;
             right_speed = fwd_speed - turn_speed;
-            fprintf('R%d State: %s | Dist to Start: %.1f mm | Fwd: %.1f | Turn: %.1f\n', robot_num, state, dist_to_start, fwd_speed, turn_speed);
+            fprintf('R%d State: %s | Dist to Start: %.1f mm | Fwd (PID): %.1f | Turn: %.1f\n', robot_num, state, dist_to_start, fwd_speed, turn_speed);
 
         case 'ALIGNMENT_PREP'
             fprintf('R%d State: %s | Pausing...\n', robot_num, state);
@@ -357,7 +419,8 @@ function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached
             if norm(F_combined) > 0.01, apf_desired_heading = rad2deg(atan2(F_combined(1), F_combined(2)));
             else, goal_vec_fb = [goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)]; apf_desired_heading = rad2deg(atan2(goal_vec_fb(1), goal_vec_fb(2))); end
             
-            heading_error = normalize_angle(apf_desired_heading - current_angle);
+            heading_error = normalize_angle(apf_desired_heading - current_angle);;
+
             [turn_adjust, integral_w, prev_error_w] = pid_control(heading_error, dt, Kp_w, Ki_w, Kd_w, integral_w, prev_error_w);
             
             left_speed = desired_speed + turn_adjust;
