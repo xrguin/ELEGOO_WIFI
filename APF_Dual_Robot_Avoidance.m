@@ -100,15 +100,44 @@ natnetclient.connect;
 if (natnetclient.IsConnected == 0), error('NatNet client failed to connect.'); end
 disp('NatNet connection successful.');
 
-% -- Initialize World View Plot
-figure('Position', [50, 100, 800, 700]);
-ax_world = gca;
+% -- Initialize Consolidated Figure and Subplots
+h_main_fig = figure('Position', [50, 50, 1800, 900], 'Name', 'APF Dual Robot Simulation');
+sgtitle('APF Dual Robot Mutual Avoidance', 'FontSize', 16);
+
+% Left plot: World View (spans two rows)
+ax_world = subplot(2,3,[1,4]);
 hold(ax_world, 'on'); grid on; axis equal;
-title(ax_world, 'APF Dual Robot Mutual Avoidance (World View)');
+title(ax_world, 'World View');
 xlabel(ax_world, 'X (mm)'); ylabel(ax_world, 'Y (mm)'); zlabel(ax_world, 'Z (mm)');
 view(ax_world, 0, 0);
 
-% -- Plot Boundaries and Axis Limits
+% Middle top plot: Robot 1 Forces
+ax_force_r1 = subplot(2,3,2);
+hold(ax_force_r1, 'on'); grid on;
+title(ax_force_r1, 'Robot 1 APF Forces');
+xlabel(ax_force_r1, 'Time (s)'); ylabel(ax_force_r1, 'Force Magnitude');
+
+% Middle bottom plot: Robot 2 Forces
+ax_force_r2 = subplot(2,3,5);
+hold(ax_force_r2, 'on'); grid on;
+title(ax_force_r2, 'Robot 2 APF Forces');
+xlabel(ax_force_r2, 'Time (s)'); ylabel(ax_force_r2, 'Force Magnitude');
+
+% Right top plot: Robot 1 Heading
+ax_heading_r1 = subplot(2,3,3);
+hold(ax_heading_r1, 'on'); grid on;
+title(ax_heading_r1, 'Robot 1 APF Heading Control');
+xlabel(ax_heading_r1, 'Time (s)'); ylabel(ax_heading_r1, 'Heading (degrees)');
+ylim(ax_heading_r1, [-180, 180]);
+
+% Right bottom plot: Robot 2 Heading
+ax_heading_r2 = subplot(2,3,6);
+hold(ax_heading_r2, 'on'); grid on;
+title(ax_heading_r2, 'Robot 2 APF Heading Control');
+xlabel(ax_heading_r2, 'Time (s)'); ylabel(ax_heading_r2, 'Heading (degrees)');
+ylim(ax_heading_r2, [-180, 180]);
+
+% -- Plot Boundaries and Axis Limits to World View
 boundary_pts = [ 2467,   50,  148; 1814,   65, -2659; -1878,   37, -2732; -1101,  6.8,  1769];
 closed_boundary = [boundary_pts; boundary_pts(1,:)];
 plot3(ax_world, closed_boundary(:,1), closed_boundary(:,2), closed_boundary(:,3), 'k-', 'LineWidth', 2, 'HandleVisibility', 'off');
@@ -124,91 +153,36 @@ plot3(ax_world, robot1_goal_pos(1), robot1_goal_pos(2), robot1_goal_pos(3), 'b*'
 h_robot1 = plot3(ax_world, 0, 0, 0, 'bo', 'MarkerSize', 10, 'MarkerFaceColor', 'b', 'DisplayName', 'Robot 1');
 h_robot1_orientation = line(ax_world, [0 0], [0 0], [0 0], 'Color', 'b', 'LineWidth', 2, 'HandleVisibility', 'off');
 h_trajectory1 = plot3(ax_world, 0, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'R1 Trajectory');
-
-% Robot 1 detection range circle (transparent light blue)
 theta = linspace(0, 2*pi, 50);
 detection_circle_x = detection_radius_mm * cos(theta);
 detection_circle_z = detection_radius_mm * sin(theta);
 detection_circle_y = zeros(size(theta));
-h_detection1 = patch(ax_world, detection_circle_x, detection_circle_y, detection_circle_z, 'b', ...
-    'FaceAlpha', 0.1, 'EdgeColor', 'b', 'EdgeAlpha', 0.3, 'LineWidth', 1, 'DisplayName', 'R1 Detection Range');
-
+h_detection1 = patch(ax_world, detection_circle_x, detection_circle_y, detection_circle_z, 'b', 'FaceAlpha', 0.1, 'EdgeColor', 'b', 'EdgeAlpha', 0.3, 'LineWidth', 1, 'DisplayName', 'R1 Detection Range');
 plot3(ax_world, robot2_start_pos(1), robot2_start_pos(2), robot2_start_pos(3), 'mo', 'MarkerSize', 12, 'MarkerFaceColor', 'm', 'DisplayName', 'R2 Start');
 plot3(ax_world, robot2_goal_pos(1), robot2_goal_pos(2), robot2_goal_pos(3), 'g*', 'MarkerSize', 15, 'LineWidth', 2, 'DisplayName', 'R2 Goal');
 h_robot2 = plot3(ax_world, 0, 0, 0, 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g', 'DisplayName', 'Robot 2');
 h_robot2_orientation = line(ax_world, [0 0], [0 0], [0 0], 'Color', 'g', 'LineWidth', 2, 'HandleVisibility', 'off');
 h_trajectory2 = plot3(ax_world, 0, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'R2 Trajectory');
-
-% Robot 2 detection range circle (transparent light green)
-h_detection2 = patch(ax_world, detection_circle_x, detection_circle_y, detection_circle_z, 'g', ...
-    'FaceAlpha', 0.1, 'EdgeColor', 'g', 'EdgeAlpha', 0.3, 'LineWidth', 1, 'DisplayName', 'R2 Detection Range');
-
+h_detection2 = patch(ax_world, detection_circle_x, detection_circle_y, detection_circle_z, 'g', 'FaceAlpha', 0.1, 'EdgeColor', 'g', 'EdgeAlpha', 0.3, 'LineWidth', 1, 'DisplayName', 'R2 Detection Range');
 legend(ax_world, 'Location', 'best');
 
-% -- Initialize Robot 1 Perspective Plot
-% figure('Position', [900, 450, 600, 500]);
-% ax_vision = gca;
-% hold(ax_vision, 'on'); grid on; axis equal;
-% title(ax_vision, 'Robot 1 Perspective');
-% xlabel(ax_vision, 'Relative X (mm)'); ylabel(ax_vision, 'Relative Z (mm)');
-% h_vision_self = plot(ax_vision, 0, 0, 'bo', 'MarkerSize', 12, 'MarkerFaceColor', 'b', 'DisplayName', 'Robot 1');
-% h_vision_self_orient = line(ax_vision, [0 0], [0 250], 'Color', 'b', 'LineWidth', 3, 'DisplayName', 'R1 Heading');
-% h_vision_obstacle = plot(ax_vision, 0, 0, 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g', 'DisplayName', 'Obstacle (R2)');
-% h_vision_goal = plot(ax_vision, 0, 0, 'r*', 'MarkerSize', 15, 'LineWidth', 2, 'DisplayName', 'Goal');
-% h_vision_traj = plot(ax_vision, 0, 0, 'k:', 'LineWidth', 1, 'DisplayName', 'Path History');
-% legend(ax_vision, 'Location', 'best');
-
-% -- Initialize Robot 1 Heading Plot
-figure('Position', [900, 50, 600, 350]);
-ax_heading = gca;
-hold(ax_heading, 'on'); grid on;
-title(ax_heading, 'Robot 1 APF Heading Control');
-xlabel(ax_heading, 'Time (s)'); ylabel(ax_heading, 'Heading (degrees)');
-ylim(ax_heading, [-180, 180]);
-h_apf_heading = plot(ax_heading, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
-h_current_heading = plot(ax_heading, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
-h_heading_point = plot(ax_heading, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
-legend(ax_heading, 'Location', 'best');
-
-figure('Position', [900, 450, 600, 350]);
-ax_heading2 = gca;
-hold(ax_heading2, 'on'); grid on;
-title(ax_heading2, 'Robot 2 APF Heading Control');
-xlabel(ax_heading2, 'Time (s)'); ylabel(ax_heading2, 'Heading (degrees)');
-ylim(ax_heading2, [-180, 180]);
-h_apf_heading2 = plot(ax_heading2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
-h_current_heading2 = plot(ax_heading2, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
-h_heading_point2 = plot(ax_heading2, 0, 0, 'go', 'MarkerSize', 8, 'MarkerFaceColor', 'g', 'HandleVisibility', 'off');
-legend(ax_heading2, 'Location', 'best');
-
-figure
-ax_heading_error = gca;
-hold(ax_heading_error, 'on'); grid on;
-title(ax_heading_error, 'Robot 1 Heading Error');
-xlabel(ax_heading_error, 'Time (s)'); ylabel(ax_heading_error, 'Heading Error (degrees)');
-ylim(ax_heading_error, [-180, 180]);
-h_current_heading_error = plot(ax_heading_error, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Heading Error');
-h_heading_error_point = plot(ax_heading_error, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
-legend(ax_heading_error, 'Location', 'best');
-
-% -- Initialize APF Force Plot
-figure('Position', [1550, 50, 600, 700]);
-ax_force_r1 = subplot(2,1,1);
-hold(ax_force_r1, 'on'); grid on;
-title(ax_force_r1, 'Robot 1 APF Forces');
-xlabel(ax_force_r1, 'Time (s)'); ylabel(ax_force_r1, 'Force Magnitude');
+% -- Force Plot Handles
 h_r1_att_force = plot(ax_force_r1, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Attractive Force');
 h_r1_rep_force = plot(ax_force_r1, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'Repulsive Force');
 legend(ax_force_r1, 'Location', 'best');
-
-ax_force_r2 = subplot(2,1,2);
-hold(ax_force_r2, 'on'); grid on;
-title(ax_force_r2, 'Robot 2 APF Forces');
-xlabel(ax_force_r2, 'Time (s)'); ylabel(ax_force_r2, 'Force Magnitude');
 h_r2_att_force = plot(ax_force_r2, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'Attractive Force');
 h_r2_rep_force = plot(ax_force_r2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'Repulsive Force');
 legend(ax_force_r2, 'Location', 'best');
 
+% -- Heading Plot Handles
+h_apf_heading_r1 = plot(ax_heading_r1, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
+h_current_heading_r1 = plot(ax_heading_r1, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
+h_heading_point_r1 = plot(ax_heading_r1, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
+legend(ax_heading_r1, 'Location', 'best');
+h_apf_heading_r2 = plot(ax_heading_r2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
+h_current_heading_r2 = plot(ax_heading_r2, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
+h_heading_point_r2 = plot(ax_heading_r2, 0, 0, 'go', 'MarkerSize', 8, 'MarkerFaceColor', 'g', 'HandleVisibility', 'off');
+legend(ax_heading_r2, 'Location', 'best');
 
 % -- Initialize State Variables
 % Robot 1
@@ -227,8 +201,15 @@ r2_integral_d = 0; r2_prev_error_d = 0;  % Velocity PID states for initial appro
 r2_prev_obstacle_dist = Inf; % For force hysteresis
 r2_min_dist_reached = false; % For one-way boost logic
 
+% -- Initialize Video Recorder
+disp('Initializing video writer...');
+video_writer = VideoWriter("apf_simulation_1.avi", "Uncompressed AVI");
+video_writer.FrameRate = 15;
+open(video_writer);
+disp('Video writer initialized.');
+
 last_loop_time = tic;
-disp('Initialization complete. Starting dual robot avoidance...');
+disp('Initialization complete. Starting dual robot avoidance');
 
 % =======================================================================
 % 3. MAIN CONTROL LOOP
@@ -264,7 +245,7 @@ try
         if r1_goal_reached && r2_goal_reached, disp('Both robots reached goals!'); send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S'); break; end
 
         % -- ROBOT 1 CONTROL
-        [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head, r1_heading_err, r1_id, r1_ped, r1_F_att, r1_F_rep, r1_prev_obstacle_dist, r1_min_dist_reached] = ...
+        [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head, ~, r1_id, r1_ped, r1_F_att, r1_F_rep, r1_prev_obstacle_dist, r1_min_dist_reached] = ...
             robot_control_logic(dt, r1_state, r1_pos, r1_angle, robot1_start_pos, robot1_goal_pos, r2_pos, ...
                 r1_integral_w, r1_prev_error_w, r1_integral_d, r1_prev_error_d, r1_goal_reached, r1_alignment_timer, r1_prev_obstacle_dist, r1_min_dist_reached, ...
                 Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
@@ -273,7 +254,7 @@ try
         r1_integral_d = r1_id; r1_prev_error_d = r1_ped;
 
         % -- ROBOT 2 CONTROL
-        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, r2_heading_err, r2_id, r2_ped, r2_F_att, r2_F_rep, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
+        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, ~, r2_id, r2_ped, r2_F_att, r2_F_rep, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
             robot_control_logic(dt, r2_state, r2_pos, r2_angle, robot2_start_pos, robot2_goal_pos, r1_pos, ...
                 r2_integral_w, r2_prev_error_w, r2_integral_d, r2_prev_error_d, r2_goal_reached, r2_alignment_timer, r2_prev_obstacle_dist, r2_min_dist_reached, ...
                 Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
@@ -282,89 +263,82 @@ try
         r2_integral_d = r2_id; r2_prev_error_d = r2_ped;
 
         % -- SYNCHRONIZATION
-        if strcmp(r1_state, 'WAITING_FOR_PARTNER') && strcmp(r2_state, 'WAITING_FOR_PARTNER'), disp('Both aligned. Starting APF.'); r1_state = 'APF_CONTROL'; r2_state = 'APF_CONTROL'; end
+        if strcmp(r1_state, "WAITING_FOR_PARTNER") && strcmp(r2_state, 'WAITING_FOR_PARTNER'), disp('Both aligned. Starting APF.'); r1_state = 'APF_CONTROL'; r2_state = 'APF_CONTROL'; end
 
         % -- SEND COMMANDS
-        if ~r1_goal_reached, json_cmd1 = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"apf1"}', r1_left, r1_right); send_robot_command(robot1_ip, json_cmd1); end
-        if ~r2_goal_reached, json_cmd2 = sprintf('{"N":4,"D1":%d,"D2":%d,"H":"apf2"}', r2_left, r2_right); send_robot_command(robot2_ip, json_cmd2); end
+        if ~r1_goal_reached, json_cmd1 = sprintf('{ "N":4,"D1":%d,"D2":%d,"H":"apf1" }', r1_left, r1_right); send_robot_command(robot1_ip, json_cmd1); end
+        if ~r2_goal_reached, json_cmd2 = sprintf('{ "N":4,"D1":%d,"D2":%d,"H":"apf2" }', r2_left, r2_right); send_robot_command(robot2_ip, json_cmd2); end
 
         % ===============================================================
         % VISUALIZATION UPDATE
         % ===============================================================
         % -- World View
-        set(h_robot1, 'XData', r1_pos(1), 'YData', r1_pos(2), 'ZData', r1_pos(3));
+        set(h_robot1, "XData", r1_pos(1), "YData", r1_pos(2), "ZData", r1_pos(3));
         orientation_len = 250;
         r1_angle_rad = deg2rad(r1_angle);
         r1_orient_end = [r1_pos(1) + orientation_len * sin(r1_angle_rad), r1_pos(2), r1_pos(3) + orientation_len * cos(r1_angle_rad)];
-        set(h_robot1_orientation, 'XData', [r1_pos(1), r1_orient_end(1)], 'YData', [r1_pos(2), r1_orient_end(2)], 'ZData', [r1_pos(3), r1_orient_end(3)]);
+        set(h_robot1_orientation, "XData", [r1_pos(1), r1_orient_end(1)], "YData", [r1_pos(2), r1_orient_end(2)], "ZData", [r1_pos(3), r1_orient_end(3)]);
         r1_traj_pts(:, end+1) = r1_pos;
-        set(h_trajectory1, 'XData', r1_traj_pts(1,:), 'YData', r1_traj_pts(2,:), 'ZData', r1_traj_pts(3,:));
-
-        set(h_robot2, 'XData', r2_pos(1), 'YData', r2_pos(2), 'ZData', r2_pos(3));
+        set(h_trajectory1, "XData", r1_traj_pts(1,:), "YData", r1_traj_pts(2,:), "ZData", r1_traj_pts(3,:));
+        set(h_robot2, "XData", r2_pos(1), 'YData', r2_pos(2), "ZData", r2_pos(3));
         r2_angle_rad = deg2rad(r2_angle);
         r2_orient_end = [r2_pos(1) + orientation_len * sin(r2_angle_rad), r2_pos(2), r2_pos(3) + orientation_len * cos(r2_angle_rad)];
         set(h_robot2_orientation, 'XData', [r2_pos(1), r2_orient_end(1)], 'YData', [r2_pos(2), r2_orient_end(2)], 'ZData', [r2_pos(3), r2_orient_end(3)]);
         r2_traj_pts(:, end+1) = r2_pos;
         set(h_trajectory2, 'XData', r2_traj_pts(1,:), 'YData', r2_traj_pts(2,:), 'ZData', r2_traj_pts(3,:));
-        
-        % -- Update detection range circles to follow robots
-        set(h_detection1, 'XData', detection_circle_x + r1_pos(1), ...
-                          'YData', detection_circle_y + r1_pos(2), ...
-                          'ZData', detection_circle_z + r1_pos(3));
-        set(h_detection2, 'XData', detection_circle_x + r2_pos(1), ...
-                          'YData', detection_circle_y + r2_pos(2), ...
-                          'ZData', detection_circle_z + r2_pos(3));
+        set(h_detection1, 'XData', detection_circle_x + r1_pos(1), 'YData', detection_circle_y + r1_pos(2), 'ZData', detection_circle_z + r1_pos(3));
+        set(h_detection2, 'XData', detection_circle_x + r2_pos(1), 'YData', detection_circle_y + r2_pos(2), 'ZData', detection_circle_z + r2_pos(3));
 
-        % -- Robot 1 Heading Plot
+        % -- Plot Updates
         if strcmp(r1_state, 'APF_CONTROL')
             if isempty(r1_apf_start_time), r1_apf_start_time = tic; end
             current_apf_time = toc(r1_apf_start_time);
-            r1_heading_time_data(end+1) = current_apf_time;
-            r1_heading_angle_data(end+1) = r1_angle;
-            r1_apf_heading_data(end+1) = r1_apf_head;
-            r1_heading_error_data(end+1) = r1_heading_err;
-            set(h_current_heading, 'XData', r1_heading_time_data, 'YData', r1_heading_angle_data);
-            set(h_apf_heading, 'XData', r1_heading_time_data, 'YData', r1_apf_heading_data);
-            set(h_heading_point, 'XData', current_apf_time, 'YData', r1_angle);
-            % Update heading error plot
-            set(h_current_heading_error, 'XData', r1_heading_time_data, 'YData', r1_heading_error_data);
-            set(h_heading_error_point, 'XData', current_apf_time, 'YData', r1_heading_err);
-
-            % Update force plot
+            % Force data
             r1_force_time_data(end+1) = current_apf_time;
             r1_att_force_data(end+1) = r1_F_att;
             r1_rep_force_data(end+1) = r1_F_rep;
             set(h_r1_att_force, 'XData', r1_force_time_data, 'YData', r1_att_force_data);
             set(h_r1_rep_force, 'XData', r1_force_time_data, 'YData', r1_rep_force_data);
+            % Heading data
+            r1_heading_time_data(end+1) = current_apf_time;
+            r1_heading_angle_data(end+1) = r1_angle;
+            r1_apf_heading_data(end+1) = r1_apf_head;
+            set(h_current_heading_r1, 'XData', r1_heading_time_data, 'YData', r1_heading_angle_data);
+            set(h_apf_heading_r1, 'XData', r1_heading_time_data, 'YData', r1_apf_heading_data);
+            set(h_heading_point_r1, 'XData', current_apf_time, 'YData', r1_angle);
         end
 
         if strcmp(r2_state, 'APF_CONTROL')
             if isempty(r2_apf_start_time), r2_apf_start_time = tic; end
             current_apf_time = toc(r2_apf_start_time);
-            r2_heading_time_data(end+1) = current_apf_time;
-            r2_heading_angle_data(end+1) = r2_angle;
-            r2_apf_heading_data(end+1) = r2_apf_head;
-            set(h_current_heading2, 'XData', r2_heading_time_data, 'YData', r2_heading_angle_data);
-            set(h_apf_heading2, 'XData', r2_heading_time_data, 'YData', r2_apf_heading_data);
-            set(h_heading_point2, 'XData', current_apf_time, 'YData', r2_angle);
-
-            % Update force plot
+            % Force data
             r2_force_time_data(end+1) = current_apf_time;
             r2_att_force_data(end+1) = r2_F_att;
             r2_rep_force_data(end+1) = r2_F_rep;
             set(h_r2_att_force, 'XData', r2_force_time_data, 'YData', r2_att_force_data);
             set(h_r2_rep_force, 'XData', r2_force_time_data, 'YData', r2_rep_force_data);
+            % Heading data
+            r2_heading_time_data(end+1) = current_apf_time;
+            r2_heading_angle_data(end+1) = r2_angle;
+            r2_apf_heading_data(end+1) = r2_apf_head;
+            set(h_current_heading_r2, 'XData', r2_heading_time_data, 'YData', r2_heading_angle_data);
+            set(h_apf_heading_r2, 'XData', r2_heading_time_data, 'YData', r2_apf_heading_data);
+            set(h_heading_point_r2, 'XData', current_apf_time, 'YData', r2_angle);
         end
 
-
-
-
-
-        drawnow limitrate;
+        % -- Capture Frame for Video
+        drawnow;
+        try
+            frame = getframe(h_main_fig);
+            writeVideo(video_writer, frame);
+        catch video_err
+            fprintf('Warning: Could not write video frame. Error: %s\n', video_err.message);
+        end
     end
 catch e
     disp('An error occurred. Stopping robots and disconnecting.');
     send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S');
+    if exist('video_writer', 'var') && isopen(video_writer), close(video_writer); disp('Video file closed.'); end
     natnetclient.disconnect;
     rethrow(e);
 end
@@ -376,6 +350,9 @@ disp('Disconnecting NatNet client...');
 send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S');
 natnetclient.disconnect;
 clear natnetclient;
+disp('Finalizing and closing video file...');
+close(video_writer);
+disp('Video file apf_simulation.avi has been saved.');
 
 % =======================================================================
 % 5. HELPER FUNCTIONS
@@ -464,7 +441,7 @@ function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached
             if norm(F_combined) > 0.01, apf_desired_heading = rad2deg(atan2(F_combined(1), F_combined(2)));
             else, goal_vec_fb = [goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)]; apf_desired_heading = rad2deg(atan2(goal_vec_fb(1), goal_vec_fb(2))); end
             
-            heading_error = normalize_angle(apf_desired_heading - current_angle);;
+            heading_error = normalize_angle(apf_desired_heading - current_angle);
 
             [turn_adjust, integral_w, prev_error_w] = pid_control(heading_error, dt, Kp_w, Ki_w, Kd_w, integral_w, prev_error_w);
             
@@ -503,6 +480,7 @@ function [F_att, F_rep, F_combined] = calculate_apf_forces(current_pos, goal, ob
             if use_boost
                 % Force is increasing: use boosted sqrt logic
                 rep_magnitude = sqrt(rep_magnitude_normalized);
+              %   rep_magnitude = rep_magnitude_normalized;
             else
                 % Force is decreasing or min distance has been passed: use normal linear logic
                 rep_magnitude = rep_magnitude_normalized;
