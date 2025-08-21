@@ -15,8 +15,8 @@ clc; close all;
 % 0. SETUP - Load NatNet .NET Assembly
 % =======================================================================
 try
-    % NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
-    NET.addAssembly('D:\MATLAB_Local\NatNetSDK\lib\x64\NatNetML.dll');
+     NET.addAssembly('D:\NatNet_SDK_4.3\NatNetSDK\lib\x64\NatNetML.dll');
+    %NET.addAssembly('D:\MATLAB_Local\NatNetSDK\lib\x64\NatNetML.dll');
 catch e
     error(['Failed to load NatNetML.dll. Please ensure the path is correct ' ...
            'and the .NET Framework is installed. Original error: %s'], e.message);
@@ -48,7 +48,7 @@ robot2_rigid_body_id = robot_configs(robot2_id).rigid_body_id;
 fprintf('Controlling Robot 1 (ID: %d) and Robot 2 (ID: %d)\n', robot1_rigid_body_id, robot2_rigid_body_id);
 
 % -- NatNet Server Configuration
-natnet_client_ip = '192.168.1.70';
+natnet_client_ip = '192.168.1.203';
 natnet_server_ip = '192.168.1.209';
 
 % -- Start and Goal Positions (Swapped for each robot)
@@ -191,16 +191,41 @@ h_current_heading_error = plot(ax_heading_error, 0, 0, 'b-', 'LineWidth', 2, 'Di
 h_heading_error_point = plot(ax_heading_error, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
 legend(ax_heading_error, 'Location', 'best');
 
+% -- Initialize APF Force Plot
+figure('Position', [1550, 50, 600, 700]);
+ax_force_r1 = subplot(2,1,1);
+hold(ax_force_r1, 'on'); grid on;
+title(ax_force_r1, 'Robot 1 APF Forces');
+xlabel(ax_force_r1, 'Time (s)'); ylabel(ax_force_r1, 'Force Magnitude');
+h_r1_att_force = plot(ax_force_r1, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Attractive Force');
+h_r1_rep_force = plot(ax_force_r1, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'Repulsive Force');
+legend(ax_force_r1, 'Location', 'best');
+
+ax_force_r2 = subplot(2,1,2);
+hold(ax_force_r2, 'on'); grid on;
+title(ax_force_r2, 'Robot 2 APF Forces');
+xlabel(ax_force_r2, 'Time (s)'); ylabel(ax_force_r2, 'Force Magnitude');
+h_r2_att_force = plot(ax_force_r2, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'Attractive Force');
+h_r2_rep_force = plot(ax_force_r2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'Repulsive Force');
+legend(ax_force_r2, 'Location', 'best');
+
+
 % -- Initialize State Variables
 % Robot 1
 r1_state = 'INITIAL_APPROACH'; r1_integral_w = 0; r1_prev_error_w = 0; r1_traj_pts = []; r1_last_valid_pos = [0,0,0]; r1_goal_reached = false; r1_alignment_timer = 0;
 r1_apf_start_time = []; r1_heading_time_data = []; r1_heading_angle_data = []; r1_apf_heading_data = []; r1_heading_error_data = [];
+r1_force_time_data = []; r1_att_force_data = []; r1_rep_force_data = []; % Force data
 r1_integral_d = 0; r1_prev_error_d = 0;  % Velocity PID states for initial approach
+r1_prev_obstacle_dist = Inf; % For force hysteresis
+r1_min_dist_reached = false; % For one-way boost logic
 
 % Robot 2
 r2_state = 'INITIAL_APPROACH'; r2_integral_w = 0; r2_prev_error_w = 0; r2_traj_pts = []; r2_last_valid_pos = [0,0,0]; r2_goal_reached = false; r2_alignment_timer = 0;
 r2_apf_start_time = []; r2_heading_time_data = []; r2_heading_angle_data = []; r2_apf_heading_data = [];
+r2_force_time_data = []; r2_att_force_data = []; r2_rep_force_data = []; % Force data
 r2_integral_d = 0; r2_prev_error_d = 0;  % Velocity PID states for initial approach
+r2_prev_obstacle_dist = Inf; % For force hysteresis
+r2_min_dist_reached = false; % For one-way boost logic
 
 last_loop_time = tic;
 disp('Initialization complete. Starting dual robot avoidance...');
@@ -239,18 +264,18 @@ try
         if r1_goal_reached && r2_goal_reached, disp('Both robots reached goals!'); send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S'); break; end
 
         % -- ROBOT 1 CONTROL
-        [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head, r1_heading_err, r1_id, r1_ped] = ...
+        [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head, r1_heading_err, r1_id, r1_ped, r1_F_att, r1_F_rep, r1_prev_obstacle_dist, r1_min_dist_reached] = ...
             robot_control_logic(dt, r1_state, r1_pos, r1_angle, robot1_start_pos, robot1_goal_pos, r2_pos, ...
-                r1_integral_w, r1_prev_error_w, r1_integral_d, r1_prev_error_d, r1_goal_reached, r1_alignment_timer, ...
+                r1_integral_w, r1_prev_error_w, r1_integral_d, r1_prev_error_d, r1_goal_reached, r1_alignment_timer, r1_prev_obstacle_dist, r1_min_dist_reached, ...
                 Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
                 distance_tolerance, alignment_heading_tolerance, desired_motor_speed, max_initial_speed, 1);
         r1_integral_w = r1_iw; r1_prev_error_w = r1_pew; r1_goal_reached = r1_gr; r1_alignment_timer = r1_at;
         r1_integral_d = r1_id; r1_prev_error_d = r1_ped;
 
         % -- ROBOT 2 CONTROL
-        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, r2_heading_err, r2_id, r2_ped] = ...
+        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, r2_heading_err, r2_id, r2_ped, r2_F_att, r2_F_rep, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
             robot_control_logic(dt, r2_state, r2_pos, r2_angle, robot2_start_pos, robot2_goal_pos, r1_pos, ...
-                r2_integral_w, r2_prev_error_w, r2_integral_d, r2_prev_error_d, r2_goal_reached, r2_alignment_timer, ...
+                r2_integral_w, r2_prev_error_w, r2_integral_d, r2_prev_error_d, r2_goal_reached, r2_alignment_timer, r2_prev_obstacle_dist, r2_min_dist_reached, ...
                 Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
                 distance_tolerance, alignment_heading_tolerance, desired_motor_speed, max_initial_speed, 2);
         r2_integral_w = r2_iw; r2_prev_error_w = r2_pew; r2_goal_reached = r2_gr; r2_alignment_timer = r2_at;
@@ -304,6 +329,13 @@ try
             % Update heading error plot
             set(h_current_heading_error, 'XData', r1_heading_time_data, 'YData', r1_heading_error_data);
             set(h_heading_error_point, 'XData', current_apf_time, 'YData', r1_heading_err);
+
+            % Update force plot
+            r1_force_time_data(end+1) = current_apf_time;
+            r1_att_force_data(end+1) = r1_F_att;
+            r1_rep_force_data(end+1) = r1_F_rep;
+            set(h_r1_att_force, 'XData', r1_force_time_data, 'YData', r1_att_force_data);
+            set(h_r1_rep_force, 'XData', r1_force_time_data, 'YData', r1_rep_force_data);
         end
 
         if strcmp(r2_state, 'APF_CONTROL')
@@ -315,6 +347,13 @@ try
             set(h_current_heading2, 'XData', r2_heading_time_data, 'YData', r2_heading_angle_data);
             set(h_apf_heading2, 'XData', r2_heading_time_data, 'YData', r2_apf_heading_data);
             set(h_heading_point2, 'XData', current_apf_time, 'YData', r2_angle);
+
+            % Update force plot
+            r2_force_time_data(end+1) = current_apf_time;
+            r2_att_force_data(end+1) = r2_F_att;
+            r2_rep_force_data(end+1) = r2_F_rep;
+            set(h_r2_att_force, 'XData', r2_force_time_data, 'YData', r2_att_force_data);
+            set(h_r2_rep_force, 'XData', r2_force_time_data, 'YData', r2_rep_force_data);
         end
 
 
@@ -342,13 +381,17 @@ clear natnetclient;
 % 5. HELPER FUNCTIONS
 % =======================================================================
 
-function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached, alignment_timer, apf_desired_heading, heading_error, integral_d, prev_error_d] = ...
+function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached, alignment_timer, apf_desired_heading, heading_error, integral_d, prev_error_d, F_att_mag, F_rep_mag, new_prev_obstacle_dist, new_min_dist_reached] = ...
     robot_control_logic(dt, state, current_pos_3d, current_angle, start_pos, goal_pos, obstacle_pos_3d, ...
-    integral_w, prev_error_w, integral_d, prev_error_d, goal_reached, alignment_timer, ...
+    integral_w, prev_error_w, integral_d, prev_error_d, goal_reached, alignment_timer, prev_obstacle_dist, min_dist_reached, ...
     Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius, ...
     distance_tolerance, alignment_tolerance, desired_speed, max_initial_speed, robot_num)
     
     left_speed = 0; right_speed = 0; apf_desired_heading = NaN; heading_error = 0;
+    F_att_mag = NaN; F_rep_mag = NaN; % Initialize force magnitudes
+    new_prev_obstacle_dist = prev_obstacle_dist; % Default to passing the value through
+    new_min_dist_reached = min_dist_reached;
+
     if goal_reached, state = 'GOAL_REACHED'; end
 
     dist_to_goal = norm([goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)]);
@@ -361,60 +404,62 @@ function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached
         alignment_timer = tic;
         integral_w = 0;
         prev_error_w = 0;
-        % Reset velocity PID states when transitioning out of INITIAL_APPROACH
         integral_d = 0;
         prev_error_d = 0;
     end
 
     switch state
-        case 'INITIAL_APPROACH'
-            target_vec = [start_pos(1) - current_pos_3d(1), start_pos(3) - current_pos_3d(3)];
-            target_angle = rad2deg(atan2(target_vec(1), target_vec(2)));
-            heading_error = normalize_angle(target_angle - current_angle);
-            
-            % PID control for forward speed based on distance
-            integral_d = integral_d + dist_to_start * dt;
-            if dt > 0, derivative_d = (dist_to_start - prev_error_d) / dt; else, derivative_d = 0; end
-            fwd_speed = Kp_d * dist_to_start + Ki_d * integral_d + Kd_d * derivative_d;
-            prev_error_d = dist_to_start;
-            fwd_speed = min(max(fwd_speed, 0), max_initial_speed);
-            
-            % Heading control
-            turn_speed = 1.0 * heading_error;
-            left_speed = fwd_speed + turn_speed;
-            right_speed = fwd_speed - turn_speed;
-            fprintf('R%d State: %s | Dist to Start: %.1f mm | Fwd (PID): %.1f | Turn: %.1f\n', robot_num, state, dist_to_start, fwd_speed, turn_speed);
+        case {'INITIAL_APPROACH', 'ALIGNMENT_PREP', 'ALIGNING', 'WAITING_FOR_PARTNER'}
+            new_prev_obstacle_dist = Inf; % Reset hysteresis state
+            new_min_dist_reached = false; % Reset hysteresis state
 
-        case 'ALIGNMENT_PREP'
-            fprintf('R%d State: %s | Pausing...\n', robot_num, state);
-            if toc(alignment_timer) >= 1, fprintf('Robot %d: Starting alignment to goal...\n', robot_num); state = 'ALIGNING'; end
-
-        case 'ALIGNING'
-            goal_vec = [goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)];
-            target_angle = rad2deg(atan2(goal_vec(1), goal_vec(2)));
-            heading_error = normalize_angle(target_angle - current_angle);
-            fprintf('R%d State: %s | Heading Error: %.1f deg\n', robot_num, state, heading_error);
-            if abs(heading_error) < alignment_tolerance, fprintf('Robot %d: Alignment complete. Waiting for partner...\n', robot_num); state = 'WAITING_FOR_PARTNER'; integral_w = 0; prev_error_w = 0;
-            else, [left_speed, right_speed, integral_w, prev_error_w] = pid_turn(heading_error, dt, Kp_w, Ki_w, Kd_w, integral_w, prev_error_w); end
-        
-        case 'WAITING_FOR_PARTNER'
-            fprintf('R%d State: %s\n', robot_num, state);
-            left_speed = 0; right_speed = 0;
+            if strcmp(state, 'INITIAL_APPROACH')
+                target_vec = [start_pos(1) - current_pos_3d(1), start_pos(3) - current_pos_3d(3)];
+                target_angle = rad2deg(atan2(target_vec(1), target_vec(2)));
+                heading_error = normalize_angle(target_angle - current_angle);
+                
+                integral_d = integral_d + dist_to_start * dt;
+                if dt > 0, derivative_d = (dist_to_start - prev_error_d) / dt; else, derivative_d = 0; end
+                fwd_speed = Kp_d * dist_to_start + Ki_d * integral_d + Kd_d * derivative_d;
+                prev_error_d = dist_to_start;
+                fwd_speed = min(max(fwd_speed, 0), max_initial_speed);
+                
+                turn_speed = 1.0 * heading_error;
+                left_speed = fwd_speed + turn_speed;
+                right_speed = fwd_speed - turn_speed;
+                fprintf('R%d State: %s | Dist to Start: %.1f mm | Fwd (PID): %.1f | Turn: %.1f\n', robot_num, state, dist_to_start, fwd_speed, turn_speed);
+            elseif strcmp(state, 'ALIGNMENT_PREP')
+                fprintf('R%d State: %s | Pausing...\n', robot_num, state);
+                if toc(alignment_timer) >= 1, fprintf('Robot %d: Starting alignment to goal...\n', robot_num); state = 'ALIGNING'; end
+            elseif strcmp(state, 'ALIGNING')
+                goal_vec = [goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)];
+                target_angle = rad2deg(atan2(goal_vec(1), goal_vec(2)));
+                heading_error = normalize_angle(target_angle - current_angle);
+                fprintf('R%d State: %s | Heading Error: %.1f deg\n', robot_num, state, heading_error);
+                if abs(heading_error) < alignment_tolerance, fprintf('Robot %d: Alignment complete. Waiting for partner...\n', robot_num); state = 'WAITING_FOR_PARTNER'; integral_w = 0; prev_error_w = 0;
+                else, [left_speed, right_speed, integral_w, prev_error_w] = pid_turn(heading_error, dt, Kp_w, Ki_w, Kd_w, integral_w, prev_error_w); end
+            elseif strcmp(state, 'WAITING_FOR_PARTNER')
+                fprintf('R%d State: %s\n', robot_num, state);
+                left_speed = 0; right_speed = 0;
+            end
 
         case 'APF_CONTROL'
             fprintf('R%d State: %s | ', robot_num, state);
             current_pos_2d = [current_pos_3d(1); current_pos_3d(3)];
             goal_pos_2d = [goal_pos(1); goal_pos(3)];
             obstacle_pos_2d = [obstacle_pos_3d(1); obstacle_pos_3d(3)];
-            obstacle_detected = true; % In dual robot case, the other robot is always the obstacle
 
-            if obstacle_detected
-                [~, ~, F_combined] = calculate_apf_forces(current_pos_2d, goal_pos_2d, obstacle_pos_2d, detection_radius, attraction_factor, repulsion_factor);
-            else
-                goal_vector = goal_pos_2d - current_pos_2d;
-                if norm(goal_vector) > 0, F_att = attraction_factor * (goal_vector / norm(goal_vector)); else, F_att = [0; 0]; end
-                F_combined = F_att;
+            % Hysteresis logic for one-way boost
+            current_obstacle_dist = norm(obstacle_pos_2d - current_pos_2d);
+            if current_obstacle_dist > prev_obstacle_dist
+                new_min_dist_reached = true; % Set the flag permanently once robots start moving apart
             end
+            use_boost = (current_obstacle_dist < prev_obstacle_dist) && ~new_min_dist_reached;
+            new_prev_obstacle_dist = current_obstacle_dist; % Update state for next loop
+
+            [F_att, F_rep, F_combined] = calculate_apf_forces(current_pos_2d, goal_pos_2d, obstacle_pos_2d, detection_radius, attraction_factor, repulsion_factor, use_boost);
+            F_att_mag = norm(F_att);
+            F_rep_mag = norm(F_rep);
             
             if norm(F_combined) > 0.01, apf_desired_heading = rad2deg(atan2(F_combined(1), F_combined(2)));
             else, goal_vec_fb = [goal_pos(1) - current_pos_3d(1), goal_pos(3) - current_pos_3d(3)]; apf_desired_heading = rad2deg(atan2(goal_vec_fb(1), goal_vec_fb(2))); end
@@ -435,22 +480,49 @@ function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached
     right_speed = round(min(max(right_speed, -255), 255));
 end
 
-function [F_att, F_rep, F_combined] = calculate_apf_forces(current_pos, goal, obstacle, detection_radius, attraction_factor, repulsion_factor)
+function [F_att, F_rep, F_combined] = calculate_apf_forces(current_pos, goal, obstacle, detection_radius, attraction_factor, repulsion_factor, use_boost)
+    % APF logic with conditional force boost (hysteresis).
+
+    % 1. Calculate attractive force as a unit vector
     goal_vector = goal - current_pos;
-    if norm(goal_vector) > 0, F_att = attraction_factor * (goal_vector / norm(goal_vector)); else, F_att = [0; 0]; end
-    
-    F_rep = [0; 0];
+    if norm(goal_vector) > 0
+        F_att_unit = goal_vector / norm(goal_vector);
+    else
+        F_att_unit = [0; 0];
+    end
+
+    % 2. Calculate repulsive force with conditional boost
+    F_rep_scaled = [0; 0];
     if ~isempty(obstacle)
         obstacle_distance = norm(obstacle - current_pos);
         if obstacle_distance <= detection_radius && obstacle_distance > 0
             obstacle_vector = current_pos - obstacle;
-            F_rep = (obstacle_vector / norm(obstacle_vector)) * (detection_radius - obstacle_distance) / detection_radius;
-            F_rep = repulsion_factor * F_rep;
+            
+            rep_magnitude_normalized = (detection_radius - obstacle_distance) / detection_radius;
+            
+            if use_boost
+                % Force is increasing: use boosted sqrt logic
+                rep_magnitude = sqrt(rep_magnitude_normalized);
+            else
+                % Force is decreasing or min distance has been passed: use normal linear logic
+                rep_magnitude = rep_magnitude_normalized;
+            end
+            
+            F_rep_scaled = (obstacle_vector / norm(obstacle_vector)) * rep_magnitude;
         end
     end
-    
+
+    % For compatibility with plotting
+    F_att = attraction_factor * F_att_unit;
+    F_rep = repulsion_factor * F_rep_scaled;
+
+    % 3. Combine forces
     F_combined = F_att + F_rep;
-    if norm(F_combined) > 0, F_combined = F_combined / norm(F_combined); end
+    
+    % 4. Normalize
+    if norm(F_combined) > 0
+        F_combined = F_combined / norm(F_combined);
+    end
 end
 
 function [turn_adjust, new_integral, new_prev_error] = pid_control(error, dt, Kp, Ki, Kd, integral, prev_error)
