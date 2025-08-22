@@ -52,8 +52,8 @@ natnet_client_ip = '192.168.1.203';
 natnet_server_ip = '192.168.1.209';
 
 % -- Start and Goal Positions (Swapped for each robot)
-original_start = [1450, 23, 707] - [100, 0, 100];
-original_goal = [-972.4, 42, -2017.3] - [100, 0, 100];
+original_start = [500, 23, 500] - [100, 0, 100];
+original_goal = [450, 42, -2200.3] - [100, 0, 100];
 
 robot1_start_pos = original_start;
 robot1_goal_pos = original_goal;
@@ -203,7 +203,7 @@ r2_min_dist_reached = false; % For one-way boost logic
 
 % -- Initialize Video Recorder
 disp('Initializing video writer...');
-video_writer = VideoWriter("apf_simulation_1.avi", "Uncompressed AVI");
+video_writer = VideoWriter("apf_simulation_4.avi", "Uncompressed AVI");
 video_writer.FrameRate = 15;
 open(video_writer);
 disp('Video writer initialized.');
@@ -283,14 +283,19 @@ try
         set(h_robot2, "XData", r2_pos(1), 'YData', r2_pos(2), "ZData", r2_pos(3));
         r2_angle_rad = deg2rad(r2_angle);
         r2_orient_end = [r2_pos(1) + orientation_len * sin(r2_angle_rad), r2_pos(2), r2_pos(3) + orientation_len * cos(r2_angle_rad)];
+        set(h_robot1_orientation, 'XData', [r1_pos(1), r1_orient_end(1)], 'YData', [r1_pos(2), r1_orient_end(2)], 'ZData', [r1_pos(3), r1_orient_end(3)]);
+        set(h_robot2, 'XData', r2_pos(1), 'YData', r2_pos(2), 'ZData', r2_pos(3));
+        r2_angle_rad = deg2rad(r2_angle);
+        r2_orient_end = [r2_pos(1) + orientation_len * sin(r2_angle_rad), r2_pos(2), r2_pos(3) + orientation_len * cos(r2_angle_rad)];
         set(h_robot2_orientation, 'XData', [r2_pos(1), r2_orient_end(1)], 'YData', [r2_pos(2), r2_orient_end(2)], 'ZData', [r2_pos(3), r2_orient_end(3)]);
-        r2_traj_pts(:, end+1) = r2_pos;
-        set(h_trajectory2, 'XData', r2_traj_pts(1,:), 'YData', r2_traj_pts(2,:), 'ZData', r2_traj_pts(3,:));
         set(h_detection1, 'XData', detection_circle_x + r1_pos(1), 'YData', detection_circle_y + r1_pos(2), 'ZData', detection_circle_z + r1_pos(3));
         set(h_detection2, 'XData', detection_circle_x + r2_pos(1), 'YData', detection_circle_y + r2_pos(2), 'ZData', detection_circle_z + r2_pos(3));
 
         % -- Plot Updates
         if strcmp(r1_state, 'APF_CONTROL')
+            r1_traj_pts(:, end+1) = r1_pos; % Log trajectory point
+            set(h_trajectory1, 'XData', r1_traj_pts(1,:), 'YData', r1_traj_pts(2,:), 'ZData', r1_traj_pts(3,:)); % Draw trajectory
+
             if isempty(r1_apf_start_time), r1_apf_start_time = tic; end
             current_apf_time = toc(r1_apf_start_time);
             % Force data
@@ -309,6 +314,9 @@ try
         end
 
         if strcmp(r2_state, 'APF_CONTROL')
+            r2_traj_pts(:, end+1) = r2_pos; % Log trajectory point
+            set(h_trajectory2, 'XData', r2_traj_pts(1,:), 'YData', r2_traj_pts(2,:), 'ZData', r2_traj_pts(3,:)); % Draw trajectory
+
             if isempty(r2_apf_start_time), r2_apf_start_time = tic; end
             current_apf_time = toc(r2_apf_start_time);
             % Force data
@@ -338,7 +346,7 @@ try
 catch e
     disp('An error occurred. Stopping robots and disconnecting.');
     send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S');
-    if exist('video_writer', 'var') && isopen(video_writer), close(video_writer); disp('Video file closed.'); end
+    if exist('video_writer', 'var'), close(video_writer); disp('Video file closed.'); end
     natnetclient.disconnect;
     rethrow(e);
 end
@@ -353,6 +361,10 @@ clear natnetclient;
 disp('Finalizing and closing video file...');
 close(video_writer);
 disp('Video file apf_simulation.avi has been saved.');
+
+disp('Saving trajectory data to trajectories.mat...');
+save('trajectories_4.mat', 'r1_traj_pts', 'r2_traj_pts');
+disp('Trajectory data saved.');
 
 % =======================================================================
 % 5. HELPER FUNCTIONS
