@@ -2,7 +2,7 @@
 clc; clear; close all;
 
 %% Load Real Trajectory Data
-load("8.21_experiment_apf/trajectories_2.mat", "r1_traj_pts", "r2_traj_pts")
+load("D:\ELEGOO Smart Robot Car Kit V4.0 2024.01.30\SmartRobotCarV4.0_V1_20230201\ELEGOO_WIFI\Matlab\trajectories_4.mat", "r1_traj_pts", "r2_traj_pts", "r1_dt_data", "r2_dt_data")
 real_r1_x = r1_traj_pts(3,:) + 2500;
 real_r1_y = r1_traj_pts(1,:) + 2500;
 real_r2_x = r2_traj_pts(3,:) + 2500;
@@ -15,11 +15,13 @@ fprintf('Real R1 start: [%.1f, %.1f], R1 goal: [%.1f, %.1f]\n', ...
 fprintf('Real R2 start: [%.1f, %.1f], R2 goal: [%.1f, %.1f]\n', ...
     real_r2_x(1), real_r2_y(1), real_r2_x(end), real_r2_y(end));
 
-%% Initial Conditions
-r1_pos = [3518.52; 1386.13];
-r1_goal = [357.643; 3252.14];
-r2_pos = [357.643; 3252.14];
-r2_goal = [3518.52; 1386.13];
+%% Initial Conditions (from APF_Dual_Robot_Avoidance.m)
+% The start/goal positions are taken from the avoidance script and
+% mapped to the simulation's 2D coordinate system (sim_x=raw_z, sim_y=raw_x).
+r1_pos = [1719.03; 3505.11];
+r1_goal = [3245; 609.501];
+r2_pos = r1_goal;  % Robots have swapped start/goal
+r2_goal = r1_pos;
 
 %% Parameters (from APF_Dual_Robot_Avoidance.m)
 attraction_factor = 1;
@@ -27,7 +29,7 @@ repulsion_factor = 1.4;
 detection_radius = 2000;  % mm
 desired_motor_speed = 50;
 robot_speed = 3.67 * desired_motor_speed - 31.45;  % Convert to mm/s
-dt = 0.05;  % 20 Hz control
+% dt is now variable and loaded from the .mat file.
 
 %% Initialize States
 r1_traj = r1_pos;
@@ -66,83 +68,87 @@ xlim([0, 4000]); ylim([0, 4000]);
 
 
 %% Main Simulation Loop
-time_vec = [];
+% Determine the number of simulation steps by the SHORTEST trajectory array
+% to prevent index errors if one robot's data is longer than the other's.
+num_steps = min([size(r1_traj_pts, 2), size(r2_traj_pts, 2), numel(r1_dt_data), numel(r2_dt_data)]);
+fprintf('Running simulation for %d steps (based on shortest data array).\n', num_steps);
+total_time = 0;
 
-for step = 1:600  % Max 30 seconds
-    t = (step-1) * dt;
+
+for step = 1:num_steps
+    % Use the actual time step from the recorded data for this step
+    dt1 = r1_dt_data(step);
+    dt2 = r2_dt_data(step);
+    total_time = total_time + dt1; % Use dt from robot 1 for total time
     
     % Store current positions for simultaneous update
     r1_current = r1_pos;
     r2_current = r2_pos;
     
     % Calculate APF forces for Robot 1
-    [F_att_1, F_rep_1, F_combined_1, r1_prev_obstacle_dist, r1_min_dist_reached] = ...
-        calculate_apf_forces(r1_current, r1_goal, r2_current, detection_radius, ...
-        attraction_factor, repulsion_factor, r1_prev_obstacle_dist, r1_min_dist_reached);
+    [~, ~, F_combined_1, r1_prev_obstacle_dist, r1_min_dist_reached] = calculate_apf_forces(r1_current, r1_goal, r2_current, detection_radius,  attraction_factor, repulsion_factor, r1_prev_obstacle_dist, r1_min_dist_reached);
     
     % Calculate APF forces for Robot 2
-    [F_att_2, F_rep_2, F_combined_2, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
+    [~, ~, F_combined_2, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
         calculate_apf_forces(r2_current, r2_goal, r1_current, detection_radius, ...
         attraction_factor, repulsion_factor, r2_prev_obstacle_dist, r2_min_dist_reached);
     
     % PID Heading Control for Robot 1
     desired_heading_1 = atan2(F_combined_1(2), F_combined_1(1));
     error_1 = atan2(sin(desired_heading_1 - r1_heading), cos(desired_heading_1 - r1_heading));
-    r1_integral = r1_integral + error_1 * dt;
+    r1_integral = r1_integral + error_1 * dt1;
     r1_integral = max(min(r1_integral, 2), -2); % Anti-windup
-    derivative_1 = (error_1 - r1_prev_error) / dt;
+    if dt1 > 0, derivative_1 = (error_1 - r1_prev_error) / dt1; else, derivative_1 = 0; end
     heading_change_1 = Kp * error_1 + Ki * r1_integral + Kd * derivative_1;
-    r1_heading = r1_heading + heading_change_1 * dt;
+    r1_heading = r1_heading + heading_change_1 * dt1;
     r1_prev_error = error_1;
     
     % PID Heading Control for Robot 2
     desired_heading_2 = atan2(F_combined_2(2), F_combined_2(1));
     error_2 = atan2(sin(desired_heading_2 - r2_heading), cos(desired_heading_2 - r2_heading));
-    r2_integral = r2_integral + error_2 * dt;
+    r2_integral = r2_integral + error_2 * dt2;
     r2_integral = max(min(r2_integral, 2), -2); % Anti-windup
-    derivative_2 = (error_2 - r2_prev_error) / dt;
+    if dt2 > 0, derivative_2 = (error_2 - r2_prev_error) / dt2; else, derivative_2 = 0; end
     heading_change_2 = Kp * error_2 + Ki * r2_integral + Kd * derivative_2;
-    r2_heading = r2_heading + heading_change_2 * dt;
+    r2_heading = r2_heading + heading_change_2 * dt2;
     r2_prev_error = error_2;
     
     % Update positions using actual headings (not desired)
-    r1_pos = r1_pos + robot_speed * dt * [cos(r1_heading); sin(r1_heading)];
-    r2_pos = r2_pos + robot_speed * dt * [cos(r2_heading); sin(r2_heading)];
+    r1_pos = r1_pos + robot_speed * dt1 * [cos(r1_heading); sin(r1_heading)];
+    r2_pos = r2_pos + robot_speed * dt2 * [cos(r2_heading); sin(r2_heading)];
     
     % Store trajectories
     r1_traj(:,end+1) = r1_pos;
     r2_traj(:,end+1) = r2_pos;
     
-    
-    
     % Update visualization every 10 steps
     if mod(step, 10) == 0
         set(h_sim_r1, 'XData', r1_traj(1,:), 'YData', r1_traj(2,:));
         set(h_sim_r2, 'XData', r2_traj(1,:), 'YData', r2_traj(2,:));
-
         drawnow;
     end
     
-
     % Check goal reached
     if norm(r1_pos - r1_goal) < 200 && norm(r2_pos - r2_goal) < 200
-        fprintf('Goals reached at t = %.2f s\n', t);
+        fprintf('Goals reached at t = %.2f s\n', total_time);
         break;
     end
 end
 
 %% Final Statistics
-fprintf('\n=== Results ===\n');
-if ~isempty(errors_r1)
-    fprintf('Mean error R1: %.1f mm\n', mean(errors_r1));
-    fprintf('Mean error R2: %.1f mm\n', mean(errors_r2));
-    fprintf('Max error R1: %.1f mm\n', max(errors_r1));
-    fprintf('Max error R2: %.1f mm\n', max(errors_r2));
-    fprintf('Std error R1: %.1f mm\n', std(errors_r1));
-    fprintf('Std error R2: %.1f mm\n', std(errors_r2));
-else
-    fprintf('No error data collected\n');
-end
+% This section relies on an undefined 'errors_r1', so it is commented out.
+% fprintf('\n=== Results ===\n');
+% if ~isempty(errors_r1)
+%     fprintf('Mean error R1: %.1f mm\n', mean(errors_r1));
+%     fprintf('Mean error R2: %.1f mm\n', mean(errors_r2));
+%     fprintf('Max error R1: %.1f mm\n', max(errors_r1));
+%     fprintf('Max error R2: %.1f mm\n', max(errors_r2));
+%     fprintf('Std error R1: %.1f mm\n', std(errors_r1));
+%     fprintf('Std error R2: %.1f mm\n', std(errors_r2));
+% else
+%     fprintf('No error data collected\n');
+% end
+
 
 %% EXACT APF Function from APF_Dual_Robot_Avoidance.m (lines 472-516)
 function [F_att, F_rep, F_combined, new_prev_dist, new_min_reached] = ...
