@@ -52,8 +52,8 @@ natnet_client_ip = '192.168.1.203';
 natnet_server_ip = '192.168.1.209';
 
 % -- Start and Goal Positions (Swapped for each robot)
-original_start = [500, 23, 500] - [100, 0, 100];
-original_goal = [450, 42, -2200.3] - [100, 0, 100];
+original_start = [3518.52, 33, 1386.13] - [2500, 0, 2500];
+original_goal = [357.643, 33, 3252.14] - [2500, 0, 2500];
 
 robot1_start_pos = original_start;
 robot1_goal_pos = original_goal;
@@ -186,7 +186,7 @@ legend(ax_heading_r2, 'Location', 'best');
 
 % -- Initialize State Variables
 % Robot 1
-r1_state = 'INITIAL_APPROACH'; r1_integral_w = 0; r1_prev_error_w = 0; r1_traj_pts = []; r1_last_valid_pos = [0,0,0]; r1_goal_reached = false; r1_alignment_timer = 0;
+r1_state = 'INITIAL_APPROACH'; r1_integral_w = 0; r1_prev_error_w = 0; r1_traj_pts = []; r1_dt_data = []; r1_last_valid_pos = [0,0,0]; r1_goal_reached = false; r1_alignment_timer = 0;
 r1_apf_start_time = []; r1_heading_time_data = []; r1_heading_angle_data = []; r1_apf_heading_data = []; r1_heading_error_data = [];
 r1_force_time_data = []; r1_att_force_data = []; r1_rep_force_data = []; % Force data
 r1_integral_d = 0; r1_prev_error_d = 0;  % Velocity PID states for initial approach
@@ -194,7 +194,7 @@ r1_prev_obstacle_dist = Inf; % For force hysteresis
 r1_min_dist_reached = false; % For one-way boost logic
 
 % Robot 2
-r2_state = 'INITIAL_APPROACH'; r2_integral_w = 0; r2_prev_error_w = 0; r2_traj_pts = []; r2_last_valid_pos = [0,0,0]; r2_goal_reached = false; r2_alignment_timer = 0;
+r2_state = 'INITIAL_APPROACH'; r2_integral_w = 0; r2_prev_error_w = 0; r2_traj_pts = []; r2_dt_data = []; r2_last_valid_pos = [0,0,0]; r2_goal_reached = false; r2_alignment_timer = 0;
 r2_apf_start_time = []; r2_heading_time_data = []; r2_heading_angle_data = []; r2_apf_heading_data = [];
 r2_force_time_data = []; r2_att_force_data = []; r2_rep_force_data = []; % Force data
 r2_integral_d = 0; r2_prev_error_d = 0;  % Velocity PID states for initial approach
@@ -218,6 +218,11 @@ try
     while true
         dt = toc(last_loop_time);
         last_loop_time = tic;
+
+        % --- Displaying Loop Timing Information ---
+        loop_start_time = datetime('now', 'Format', 'HH:mm:ss.SSS');
+        fprintf('Loop Start Time: %s | Loop Duration (dt): %.4f seconds\n', loop_start_time, dt);
+        % -----------------------------------------
 
         data = natnetclient.getFrame;
         if isempty(data.RigidBodies) || data.nRigidBodies < 2, disp('Waiting for at least two rigid bodies...'); pause(0.01); continue; end
@@ -278,8 +283,9 @@ try
         r1_angle_rad = deg2rad(r1_angle);
         r1_orient_end = [r1_pos(1) + orientation_len * sin(r1_angle_rad), r1_pos(2), r1_pos(3) + orientation_len * cos(r1_angle_rad)];
         set(h_robot1_orientation, "XData", [r1_pos(1), r1_orient_end(1)], "YData", [r1_pos(2), r1_orient_end(2)], "ZData", [r1_pos(3), r1_orient_end(3)]);
-        r1_traj_pts(:, end+1) = r1_pos;
-        set(h_trajectory1, "XData", r1_traj_pts(1,:), "YData", r1_traj_pts(2,:), "ZData", r1_traj_pts(3,:));
+        % Redundant trajectory logging and plotting commented out. This is handled in the APF_CONTROL state.
+        % r1_traj_pts(:, end+1) = r1_pos;
+        % set(h_trajectory1, "XData", r1_traj_pts(1,:), "YData", r1_traj_pts(2,:), "ZData", r1_traj_pts(3,:));
         set(h_robot2, "XData", r2_pos(1), 'YData', r2_pos(2), "ZData", r2_pos(3));
         r2_angle_rad = deg2rad(r2_angle);
         r2_orient_end = [r2_pos(1) + orientation_len * sin(r2_angle_rad), r2_pos(2), r2_pos(3) + orientation_len * cos(r2_angle_rad)];
@@ -294,6 +300,7 @@ try
         % -- Plot Updates
         if strcmp(r1_state, 'APF_CONTROL')
             r1_traj_pts(:, end+1) = r1_pos; % Log trajectory point
+            r1_dt_data(end+1) = dt; % Log loop duration
             set(h_trajectory1, 'XData', r1_traj_pts(1,:), 'YData', r1_traj_pts(2,:), 'ZData', r1_traj_pts(3,:)); % Draw trajectory
 
             if isempty(r1_apf_start_time), r1_apf_start_time = tic; end
@@ -315,6 +322,7 @@ try
 
         if strcmp(r2_state, 'APF_CONTROL')
             r2_traj_pts(:, end+1) = r2_pos; % Log trajectory point
+            r2_dt_data(end+1) = dt; % Log loop duration
             set(h_trajectory2, 'XData', r2_traj_pts(1,:), 'YData', r2_traj_pts(2,:), 'ZData', r2_traj_pts(3,:)); % Draw trajectory
 
             if isempty(r2_apf_start_time), r2_apf_start_time = tic; end
@@ -362,9 +370,9 @@ disp('Finalizing and closing video file...');
 close(video_writer);
 disp('Video file apf_simulation.avi has been saved.');
 
-disp('Saving trajectory data to trajectories.mat...');
-save('trajectories_4.mat', 'r1_traj_pts', 'r2_traj_pts');
-disp('Trajectory data saved.');
+disp('Saving trajectory and timing data to trajectories.mat...');
+save('trajectories_4.mat', 'r1_traj_pts', 'r2_traj_pts', 'r1_dt_data', 'r2_dt_data');
+disp('Trajectory and timing data saved.');
 
 % =======================================================================
 % 5. HELPER FUNCTIONS
