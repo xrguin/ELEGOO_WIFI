@@ -52,13 +52,31 @@ natnet_client_ip = '192.168.1.203';
 natnet_server_ip = '192.168.1.209';
 
 % -- Start and Goal Positions (Swapped for each robot)
-original_start = [3518.52, 33, 1386.13] - [2500, 0, 2500];
-original_goal = [357.643, 33, 3252.14] - [2500, 0, 2500];
+% -- Start and Goal Positions (Swapped for each robot)
+original_start_1 = [258, 33, 2396] - [2000, 0, 2500];
+original_goal_1 = [1853, 33, 200] - [2000, 0, 2500];
+original_start_2 = [2298, 33, 336] - [2000, 0, 2500];
+original_goal_2 = [200, 33, 1705] - [2000, 0, 2500];
 
-robot1_start_pos = original_start;
-robot1_goal_pos = original_goal;
-robot2_start_pos = original_goal;
-robot2_goal_pos = original_start;
+% original_start_1 = [200, 33, 200] - [2000, 0, 2500];
+% original_goal_1 = [3042, 33, 987] - [2000, 0, 2500];
+% original_start_2 = [3106, 33, 615] - [2000, 0, 2500];
+% original_goal_2 = [285, 33, 645] - [2000, 0, 2500];
+
+
+robot1_start_pos = original_start_1;
+robot1_goal_pos = original_goal_1;
+robot2_start_pos = original_start_2;
+robot2_goal_pos = original_goal_2;
+
+% 
+% original_start = [3518.52, 33, 1386.13] - [2500, 0, 2500];
+% original_goal = [357.643, 33, 3252.14] - [2500, 0, 2500];
+% 
+% robot1_start_pos = original_start;
+% robot1_goal_pos = original_goal;
+% robot2_start_pos = original_goal;
+% robot2_goal_pos = original_start;
 
 fprintf('Robot 1: Start [%.1f, %.1f, %.1f], Goal [%.1f, %.1f, %.1f]\n', robot1_start_pos, robot1_goal_pos);
 fprintf('Robot 2: Start [%.1f, %.1f, %.1f], Goal [%.1f, %.1f, %.1f]\n', robot2_start_pos, robot2_goal_pos);
@@ -175,14 +193,15 @@ h_r2_rep_force = plot(ax_force_r2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'R
 legend(ax_force_r2, 'Location', 'best');
 
 % -- Heading Plot Handles
-h_apf_heading_r1 = plot(ax_heading_r1, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
-h_current_heading_r1 = plot(ax_heading_r1, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
-h_heading_point_r1 = plot(ax_heading_r1, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
-legend(ax_heading_r1, 'Location', 'best');
 h_apf_heading_r2 = plot(ax_heading_r2, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
 h_current_heading_r2 = plot(ax_heading_r2, 0, 0, 'g-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
 h_heading_point_r2 = plot(ax_heading_r2, 0, 0, 'go', 'MarkerSize', 8, 'MarkerFaceColor', 'g', 'HandleVisibility', 'off');
 legend(ax_heading_r2, 'Location', 'best');
+h_apf_heading_r1 = plot(ax_heading_r1, 0, 0, 'r-', 'LineWidth', 2, 'DisplayName', 'APF Desired Heading');
+h_current_heading_r1 = plot(ax_heading_r1, 0, 0, 'b-', 'LineWidth', 2, 'DisplayName', 'Actual Heading');
+h_heading_point_r1 = plot(ax_heading_r1, 0, 0, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b', 'HandleVisibility', 'off');
+legend(ax_heading_r1, 'Location', 'best');
+
 
 % -- Initialize State Variables
 % Robot 1
@@ -203,7 +222,7 @@ r2_min_dist_reached = false; % For one-way boost logic
 
 % -- Initialize Video Recorder
 disp('Initializing video writer...');
-video_writer = VideoWriter("apf_simulation_4.avi", "Uncompressed AVI");
+video_writer = VideoWriter("apf_simulation_10.avi", "Uncompressed AVI");
 video_writer.FrameRate = 15;
 open(video_writer);
 disp('Video writer initialized.');
@@ -233,22 +252,37 @@ try
         r2_data = data.RigidBodies(robot2_rigid_body_id);
         r2_pos_raw = [r2_data.x, r2_data.y, r2_data.z] * 1000;
 
+
+             % -- Process Robot 2 Data
+        if norm(r2_pos_raw) < 1, r2_pos = r2_last_valid_pos; else, r2_pos = r2_pos_raw; r2_last_valid_pos = r2_pos; end
+        q2 = quaternion(r2_data.qw, r2_data.qx, r2_data.qy, r2_data.qz);
+        angles2 = q2.EulerAngles('YZX');
+        r2_angle = rad2deg(angles2(1));
+        % r2_angle = rad2deg(angles2(1)) + 230;
+        % if r2_angle >= 180, r2_angle = -360 + r2_angle; end
+
+
         % -- Process Robot 1 Data
         if norm(r1_pos_raw) < 1, r1_pos = r1_last_valid_pos; else, r1_pos = r1_pos_raw; r1_last_valid_pos = r1_pos; end
         q1 = quaternion(r1_data.qw, r1_data.qx, r1_data.qy, r1_data.qz);
         angles1 = q1.EulerAngles('YZX');
-        r1_angle = rad2deg(angles1(1)) + 230;
-        if r1_angle >= 180, r1_angle = -360 + r1_angle; end
+        r1_angle = rad2deg(angles1(1));
+        % r1_angle = rad2deg(angles1(1)) + 230;
+        % if r1_angle >= 180, r1_angle = -360 + r1_angle; end
 
-        % -- Process Robot 2 Data
-        if norm(r2_pos_raw) < 1, r2_pos = r2_last_valid_pos; else, r2_pos = r2_pos_raw; r2_last_valid_pos = r2_pos; end
-        q2 = quaternion(r2_data.qw, r2_data.qx, r2_data.qy, r2_data.qz);
-        angles2 = q2.EulerAngles('YZX');
-        r2_angle = rad2deg(angles2(1)) + 230;
-        if r2_angle >= 180, r2_angle = -360 + r2_angle; end
+   
         
         if r1_goal_reached && r2_goal_reached, disp('Both robots reached goals!'); send_robot_command(robot1_ip, 'S'); send_robot_command(robot2_ip, 'S'); break; end
+        
 
+           % -- ROBOT 2 CONTROL
+        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, ~, r2_id, r2_ped, r2_F_att, r2_F_rep, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
+            robot_control_logic(dt, r2_state, r2_pos, r2_angle, robot2_start_pos, robot2_goal_pos, r1_pos, ...
+                r2_integral_w, r2_prev_error_w, r2_integral_d, r2_prev_error_d, r2_goal_reached, r2_alignment_timer, r2_prev_obstacle_dist, r2_min_dist_reached, ...
+                Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
+                distance_tolerance, alignment_heading_tolerance, desired_motor_speed, max_initial_speed, 2);
+        r2_integral_w = r2_iw; r2_prev_error_w = r2_pew; r2_goal_reached = r2_gr; r2_alignment_timer = r2_at;
+        r2_integral_d = r2_id; r2_prev_error_d = r2_ped;
         % -- ROBOT 1 CONTROL
         [r1_left, r1_right, r1_state, r1_iw, r1_pew, r1_gr, r1_at, r1_apf_head, ~, r1_id, r1_ped, r1_F_att, r1_F_rep, r1_prev_obstacle_dist, r1_min_dist_reached] = ...
             robot_control_logic(dt, r1_state, r1_pos, r1_angle, robot1_start_pos, robot1_goal_pos, r2_pos, ...
@@ -258,17 +292,14 @@ try
         r1_integral_w = r1_iw; r1_prev_error_w = r1_pew; r1_goal_reached = r1_gr; r1_alignment_timer = r1_at;
         r1_integral_d = r1_id; r1_prev_error_d = r1_ped;
 
-        % -- ROBOT 2 CONTROL
-        [r2_left, r2_right, r2_state, r2_iw, r2_pew, r2_gr, r2_at, r2_apf_head, ~, r2_id, r2_ped, r2_F_att, r2_F_rep, r2_prev_obstacle_dist, r2_min_dist_reached] = ...
-            robot_control_logic(dt, r2_state, r2_pos, r2_angle, robot2_start_pos, robot2_goal_pos, r1_pos, ...
-                r2_integral_w, r2_prev_error_w, r2_integral_d, r2_prev_error_d, r2_goal_reached, r2_alignment_timer, r2_prev_obstacle_dist, r2_min_dist_reached, ...
-                Kp_w, Ki_w, Kd_w, Kp_d, Ki_d, Kd_d, attraction_factor, repulsion_factor, detection_radius_mm, ...
-                distance_tolerance, alignment_heading_tolerance, desired_motor_speed, max_initial_speed, 2);
-        r2_integral_w = r2_iw; r2_prev_error_w = r2_pew; r2_goal_reached = r2_gr; r2_alignment_timer = r2_at;
-        r2_integral_d = r2_id; r2_prev_error_d = r2_ped;
+     
 
         % -- SYNCHRONIZATION
-        if strcmp(r1_state, "WAITING_FOR_PARTNER") && strcmp(r2_state, 'WAITING_FOR_PARTNER'), disp('Both aligned. Starting APF.'); r1_state = 'APF_CONTROL'; r2_state = 'APF_CONTROL'; end
+        if strcmp(r1_state, "WAITING_FOR_PARTNER") && strcmp(r2_state, 'WAITING_FOR_PARTNER'), disp('Both aligned. Starting APF.'); 
+            r1_state = 'APF_CONTROL'; r2_state = 'APF_CONTROL'; 
+            r1_integral_w = 0; r1_prev_error_w = 0;
+            r2_integral_w = 0; r2_prev_error_w = 0;
+        end
 
         % -- SEND COMMANDS
         if ~r1_goal_reached, json_cmd1 = sprintf('{ "N":4,"D1":%d,"D2":%d,"H":"apf1" }', r1_left, r1_right); send_robot_command(robot1_ip, json_cmd1); end
@@ -371,7 +402,7 @@ close(video_writer);
 disp('Video file apf_simulation.avi has been saved.');
 
 disp('Saving trajectory and timing data to trajectories.mat...');
-save('trajectories_4.mat', 'r1_traj_pts', 'r2_traj_pts', 'r1_dt_data', 'r2_dt_data');
+save('trajectories_10.mat', 'r1_traj_pts', 'r2_traj_pts', 'r1_dt_data', 'r2_dt_data');
 disp('Trajectory and timing data saved.');
 
 % =======================================================================
@@ -473,8 +504,8 @@ function [left_speed, right_speed, state, integral_w, prev_error_w, goal_reached
             left_speed = 0; right_speed = 0;
     end
     
-    left_speed = round(min(max(left_speed, -255), 255));
-    right_speed = round(min(max(right_speed, -255), 255));
+    left_speed = round(min(max(left_speed, -255), 80));
+    right_speed = round(min(max(right_speed, -255), 80));
 end
 
 function [F_att, F_rep, F_combined] = calculate_apf_forces(current_pos, goal, obstacle, detection_radius, attraction_factor, repulsion_factor, use_boost)
