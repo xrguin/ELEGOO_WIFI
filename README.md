@@ -210,10 +210,10 @@ send_command(robot_ip, "STOP")
 ```
  Action   │ N (Command) │ D1 (Direction) │ D2 (Speed) │ Full JSON Command                  │
   ├──────────┼─────────────┼────────────────┼────────────┼────────────────────────────────────┤
-  │ Forward  │ 3           │ 3              │ 150        │ {"N":3,"D1":3,"D2":150,"H":"test"} │
-  │ Backward │ 3           │ 4              │ 150        │ {"N":3,"D1":4,"D2":150,"H":"test"} │
-  │ Left     │ 3           │ 1              │ 150        │ {"N":3,"D1":1,"D2":150,"H":"test"} │
-  │ Right    │ 3           │ 2              │ 150        │ {"N":3,"D1":2,"D2":150,"H":"test"} │
+  │ Forward  │ 3           │ 3              │ 150        │ '{"N":1,"D1":0,"D2":%d, "D3":1}', speed │
+  │ Backward │ 3           │ 4              │ 150        │ '{"N":1,"D1":0,"D2":%d,"D3":2}', speed │
+  │ Left     │ 3           │ 1              │ 150        │ '{"N":3,"D1":1,"D2":%d}', speed│
+  │ Right    │ 3           │ 2              │ 150        │'{"N":3,"D1":2,"D2":%d}', speed│
   │ Stop     │ 3           │ 1 (or any)     │ 0          │ {"N":3,"D1":1,"D2":0,"H":"test"}   │
 ```
 ## Features Status
